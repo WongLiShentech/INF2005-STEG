@@ -1,0 +1,6 @@
+# Keeps line endings consistent for teammates on Windows, macOS and Linux.
+* text=auto eol=lf
+
+*.png binary
+*.wav binary
+*.pem binary

@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% set active = 'protect' %}
+{% block title %}Protect a cover object{% endblock %}
+
+{% block content %}
+<form method="post" action="{{ url_for('protect') }}" enctype="multipart/form-data" id="protect-form">
+  <p class="lede">Hide a signed verification record and a secret message inside a picture. The result looks identical to the original.</p>
+
+  <section class="card">
+    <h2>1. Cover object &mdash; the file you hide things inside</h2>
+    <input type="file" name="file" id="cover-input" accept=".png,.bmp,.jpg,.jpeg,.wav" required>
+    <p class="hint" id="cover-describe">Pick a PNG, for example testFiles/original/cover.png. This is the container, not the secret. JPEG can be loaded, but the protected file is always written as PNG because lossy compression destroys the hidden bits.</p>
+  </section>
+
+  <section class="card">
+    <h2>2. Hiding password &mdash; decides where in the picture the data goes</h2>
+    <input type="text" name="key" id="key-input" placeholder="make one up, for example: team demo key" required>
+    <p class="hint">Invent any password and share it with whoever needs to check the file. The hiding place is calculated from it and never stored anywhere, so a different password means a different spot. This is separate from the RSA signing keys in keys/, which decide <em>who signed</em> rather than <em>where it is hidden</em>. Its formal name is the start-location derivation key.</p>
+  </section>
+
+  <section class="card">
+    <h2>3. LSB depth &mdash; how many bits per colour value to overwrite</h2>
+    <input type="range" name="lsb_n" id="depth-input" min="1" max="8" value="1" step="1">
+    <div class="readout">
+      <span>Depth <strong id="depth-value">1</strong> of 8</span>
+      <span>Capacity <strong id="capacity-value">&mdash;</strong></span>
+      <span>Start offset <strong id="offset-value">&mdash;</strong></span>
+    </div>
+    <p class="hint" id="depth-hint">Choose a cover object and type a key, and the capacity and start offset will appear here. Depth 1 or 2 is invisible to the eye; every extra bit doubles capacity and adds visible damage.</p>
+  </section>
+
+  <section class="card">
+    <h2>4. Secret message &mdash; what you actually want to hide</h2>
+    <textarea name="message" id="message-input" rows="5" placeholder="Type your secret message here, for example: Approved for release by the media desk."></textarea>
+    <label class="file-label">or hide a whole file instead
+      <input type="file" name="message_file">
+    </label>
+    <p class="hint"><span id="message-size">0</span> bytes typed. This is stored alongside a signed record identifying the file, so both can be checked later.</p>
+  </section>
+
+  <button type="submit">Protect</button>
+</form>
+
+{% if capacity_error %}
+<section class="card alert error">
+  <h2>Blocked: payload too large</h2>
+  <p>{{ capacity_error }}</p>
+  <p class="hint">Nothing was written. Choose a larger cover object, a shorter payload, or a greater LSB depth.</p>
+</section>
+{% endif %}
+
+{% if report %}
+<section class="card result">
+  <h2>Protected</h2>
+  <dl class="facts">
+    <div><dt>Media ID</dt><dd>{{ report.payload.media_id }}</dd></div>
+    <div><dt>Start offset</dt><dd>{{ '{:,}'.format(report.offset) }}</dd></div>
+    <div><dt>LSB depth</dt><dd>{{ report.lsb_n }}</dd></div>
+    <div><dt>Used</dt><dd>{{ '{:,}'.format(report.bytes_used) }} of {{ '{:,}'.format(report.capacity) }} bytes</dd></div>
+  </dl>
+
+  <div class="compare">
+    <figure>
+      <img src="{{ cover_url }}" alt="cover object before encoding">
+      <figcaption>Cover &mdash; before</figcaption>
+    </figure>
+    <figure>
+      <img src="{{ stego_url }}" alt="stego object after encoding">
+      <figcaption>Stego &mdash; after</figcaption>
+    </figure>
+  </div>
+
+  <p><a class="download" href="{{ stego_url }}" download>Download the stego file</a> &mdash; send this to the person who needs to verify it.</p>
+
+  <h3>Signed verification record</h3>
+  <p class="hint">This is the record the digital signature covers. It carries a fingerprint of the picture (<code>hash</code>) and a fingerprint of your message (<code>msg_sha256</code>), so one signature protects both.</p>
+  <pre>{{ payload_json }}</pre>
+</section>
+{% endif %}
+{% endblock %}

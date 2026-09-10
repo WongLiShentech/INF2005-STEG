@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% set active = 'verify' %}
+{% block title %}Verify a protected file{% endblock %}
+
+{% block content %}
+<form method="post" action="{{ url_for('verify') }}" enctype="multipart/form-data">
+  <p class="lede">Check whether a file carries a valid hidden record, who signed it, and whether the picture has been altered since.</p>
+
+  <section class="card">
+    <h2>1. File to check &mdash; the one you received</h2>
+    <input type="file" name="file" accept=".png,.bmp,.jpg,.jpeg,.wav" required>
+    <p class="hint">Usually a protected file someone sent you. Try an unprotected picture too, to see it report Payload Missing.</p>
+  </section>
+
+  <section class="card">
+    <h2>2. Hiding password &mdash; the same one used to protect it</h2>
+    <input type="text" name="key" placeholder="the same password used when the file was protected" required>
+    <p class="hint">Get this wrong and the tool looks in the wrong part of the picture, reporting Wrong Start Location. This is not the signing key &mdash; that is step 3.</p>
+  </section>
+
+  <section class="card">
+    <h2>3. Public key &mdash; who you expect signed it</h2>
+    <select name="public_key_name">
+      {% for name in public_keys %}
+      <option value="{{ name }}">
+        keys/{{ name }}{% if name == 'demo_public.pem' %} &mdash; the real signer{% elif name == 'other_public.pem' %} &mdash; a stranger, use this to make it fail{% endif %}
+      </option>
+      {% endfor %}
+    </select>
+    <p class="hint">Already on this machine, so there is nothing to upload. Pick <strong>demo_public.pem</strong> for a normal check, or <strong>other_public.pem</strong> to watch a genuine file be rejected because it was not signed by that key.</p>
+    <label class="file-label">or upload a public key from somewhere else
+      <input type="file" name="public_key" accept=".pem">
+    </label>
+    <p class="hint">This key checks the <em>signature</em> only. It does not decrypt anything &mdash; the hidden message is stored as readable text, so hiding it is not the same as protecting it.</p>
+  </section>
+
+  <button type="submit">Verify</button>
+</form>
+
+{% if result %}
+<section class="card verdict verdict-{{ result.verdict | lower | replace(' ', '-') }}">
+  <h2>{{ result.verdict }}</h2>
+  <p>{{ result.explanation }}</p>
+  <p class="hint">Checked against <strong>keys/{{ key_name }}</strong>, fingerprint <code>sha256:{{ key_fingerprint }}</code>. The private key that produced the signature was never needed here.</p>
+</section>
+
+<section class="card result">
+  <div class="compare">
+    <figure>
+      <img src="{{ stego_url }}" alt="the file being verified">
+      <figcaption>The file as received</figcaption>
+    </figure>
+  </div>
+
+  {% if result.payload %}
+  <dl class="facts">
+    <div><dt>Media ID</dt><dd>{{ result.payload.media_id }}</dd></div>
+    <div><dt>Issuer</dt><dd>{{ result.payload.issuer }}</dd></div>
+    <div><dt>Protected at</dt><dd>{{ result.payload.timestamp }}</dd></div>
+    <div><dt>LSB depth</dt><dd>{{ result.payload.lsb_n }}</dd></div>
+  </dl>
+  {% endif %}
+
+  {% if message_url %}
+  <h3>The hidden message &mdash; {{ message_name }}</h3>
+  {% if message_text %}<pre>{{ message_text }}</pre>{% endif %}
+  <p><a class="download" href="{{ message_url }}" download>Download the extracted message</a></p>
+  {% endif %}
+
+  {% if payload_json %}
+  <h3>Signed verification record</h3>
+  <p class="hint">Recovered from inside the file. The signature covers this record; the record fingerprints both the picture and the message.</p>
+  <pre>{{ payload_json }}</pre>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

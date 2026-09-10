@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}ACW1 Steganography{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header>
+    <h1>Steganographic Media Verification</h1>
+    <nav>
+      <a href="{{ url_for('protect_page') }}" class="{{ 'active' if active == 'protect' }}">Protect</a>
+      <a href="{{ url_for('verify_page') }}" class="{{ 'active' if active == 'verify' }}">Verify</a>
+    </nav>
+  </header>
+
+  <main>
+    {% if error %}<p class="alert error">{{ error }}</p>{% endif %}
+    {% block content %}{% endblock %}
+  </main>
+
+  <script src="{{ url_for('static', filename='main.js') }}"></script>
+</body>
+</html>
