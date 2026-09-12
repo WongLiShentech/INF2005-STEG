@@ -25,9 +25,14 @@ The demo keypair is already committed in `keys/`, so there is nothing else to se
 
 | Command | What it does |
 |---|---|
+| `flask --app app run` | Starts the web interface at http://127.0.0.1:5000 |
 | `pytest` | Runs the test suite. Everything should pass before you commit. |
+| `python make_demo_files.py` | Rebuilds every sample in `testFiles/` and writes `evidence/demo_run_log.txt`. |
 | `python generate_key.py` | Creates a fresh demo keypair. Only needed if you delete `keys/`. |
-| `flask --app app run` | Starts the web interface at http://127.0.0.1:5000 *(from Phase 3)* |
+
+Run `make_demo_files.py` after any change to the payload format, the key
+derivation or the demo messages, or the committed samples will no longer match
+the code that reads them.
 
 ## Project layout
 
@@ -88,11 +93,28 @@ knowing the body depth. The body follows immediately at `n` LSBs.
 
 ### 3. Start location
 
-The offset is derived, never stored:
+The offset may be chosen outright or, by default, derived. A chosen offset can
+reach anywhere in the carrier; a derived one lands in the first half. Either
+way it is never written into the file — the verifier has to know where to look
+before it can read anything, so a chosen offset travels out of band alongside
+the passphrase, and deriving it means nothing extra has to travel at all.
+
+Deriving is the stronger option and is what the samples use. A number a person
+picks by hand tends to be round and near the start, which is where anyone
+searching would look first.
+
+The derivation:
 
 ```
-offset = HMAC-SHA256(key, seed) mod (usable_units // 2)
+location_key, message_key = HKDF-SHA256(passphrase)
+offset = HMAC-SHA256(location_key, seed) mod (usable_units // 2)
 ```
+
+The user types one passphrase, but placing the payload and encrypting the
+message are unrelated jobs, and tying both to the same bytes would mean
+anything that weakened one weakened the other. HKDF expands the passphrase into
+two independent 32-byte subkeys with a distinct info string each, so recovering
+one tells an attacker nothing about the other.
 
 The seed is read from the container before any extraction — `width x height x
 channels` for images, `frames x channels x sample_width` for audio. It is
@@ -118,7 +140,27 @@ Canonical JSON means `sort_keys=True, separators=(',', ':')`, written once in
 produces different bytes for the same object depending on key order, which would
 fail verification on files that are perfectly authentic.
 
-### 5. Payload
+### 5. Message confidentiality
+
+Steganography hides that a message exists. It does not protect the message once
+found: without a cipher, anyone who learns the start location reads the text
+straight out of the carrier. Concealment is not confidentiality, so encryption
+is offered per message and recorded in both the header flag and the signed
+record.
+
+AES-256-GCM, keyed by the message subkey, with a random 12-byte nonce per
+message. GCM is authenticated encryption, so a modified ciphertext fails to open
+rather than decrypting to garbage.
+
+`msg_sha256` covers the bytes **as stored** — ciphertext when encrypted. That is
+deliberate twice over. The verifier can confirm the extracted bytes are intact
+before it tries to decrypt them, and no plaintext fingerprint travels in a
+record that is readable in the clear: digesting the plaintext of a short,
+guessable message would let it be recovered by hashing candidates until one
+matched, undoing the encryption. Plaintext integrity is not lost, because GCM's
+tag covers it and the tag sits inside the ciphertext the digest commits to.
+
+### 6. Payload
 
 ```json
 {
@@ -152,7 +194,47 @@ nonces it has already seen.
 To change the team label, edit `TEAM` at the top of `security.py`. Do it before
 generating the demo sample files, since the value is signed into each one.
 
-### 6. Verdicts
+### 7. Serving an extracted payload
+
+The interface displays an extracted image and plays extracted audio, rather
+than only reporting that a payload was found.
+
+The content type is decided by reading the payload's own leading bytes, never
+its name. `msg_name` travels inside the payload, so it is chosen by whoever
+protected the file: letting it pick a content type would allow a hidden
+`note.html` containing script to be served back as markup and run in the
+verifying browser. Anything not positively identified is sent as a generic
+attachment, so an extracted file is never interpreted by the browser checking
+it.
+
+### 8. Attack simulation
+
+`attacks.py` stages eight attacks against a protected file and states the
+verdict each should produce. Six mutate a copy of the file; two are mistakes
+made at verification time. Running them together turns the negative cases from
+a set of hand-made files into something reproducible against any protected
+object, and `make_demo_files.py` runs the whole set as part of generating the
+samples.
+
+The most useful of them is the replay: a genuine, correctly signed payload is
+lifted out of one file and dropped into another. Nothing is forged and the
+signature verifies perfectly. What the record no longer describes is the file
+it now sits in, and only the media hash can tell. It is the clearest argument
+for why the hash is needed at all.
+
+Two attacks are included because they do **not** produce the verdict we would
+want, and the module reports the reason rather than omitting the case:
+
+- **Retouching at 8 LSB goes undetected.** The integrity hash masks the lowest
+  `n` bits, so at `n = 8` it masks every bit of every value and is computed over
+  constant zeros. It cannot see any edit. The payload is still authentic; the
+  media is not, and the system cannot tell.
+- **Replay within one cover succeeds.** Two protections of the same cover share
+  a masked media hash, so a record moved between them still describes the file
+  it lands in. The record binds to media content, not to one instance of it. A
+  per-instance binding would need something the cover itself cannot supply.
+
+### 9. Verdicts
 
 | Step | Check | Verdict on failure |
 |---|---|---|
@@ -161,8 +243,15 @@ generating the demo sample files, since the value is signed into each one.
 | 3 | Version known, lengths within capacity | Cannot Verify |
 | 4 | Signature valid under the public key | Signature Invalid |
 | 5 | Signed `lsb_n` matches header `lsb_n` | Tampered |
-| 6 | Recomputed canonical hash matches | Tampered |
-| 7 | — | Authentic |
+| 6 | Signed `msg_encrypted` matches the header flag | Tampered |
+| 7 | Extracted message matches `msg_sha256` | Tampered |
+| 8 | Ciphertext opens under the message subkey | Cannot Verify |
+| 9 | Recomputed canonical hash matches | Tampered |
+| 10 | — | Authentic |
+
+Every check is recorded as it runs and returned with the verdict, so the
+interface can show the comparison each step made — both hashes side by side,
+not just the word `Tampered`. The trail stops at the first failure.
 
 Step 4 comes before the JSON is parsed: untrusted input should be authenticated
 before it is interpreted.
@@ -175,6 +264,11 @@ wrong place. We tell them apart with a bounded scan — if the magic turns up
 elsewhere, the payload exists and the derivation was wrong. The scan is capped
 deliberately, because an unbounded one would itself be a steganalysis technique.
 
+**Steps 5 and 6 reconcile the unsigned header.** The header has to be readable
+before anything is authenticated, so it travels unsigned. Both of the fields
+that change how the body is interpreted — the depth and the encryption flag —
+therefore have a signed counterpart, and a mismatch is reported as tampering.
+
 **Step 5 catches re-embedding.** Someone can lift a validly signed payload and
 re-embed it at a different depth with a matching header. The body reads cleanly
 and the signature verifies, but the depth inside the signed record no longer
@@ -184,6 +278,21 @@ matches the header, so it reports Tampered.
 the signature (`Signature Invalid`). Editing the media *outside* it, above the LSB
 planes, leaves the signature perfectly valid and is caught by the hash instead
 (`Tampered`). Different mechanisms, different verdicts.
+
+## Interface
+
+Three pages, one job each: **Protect** embeds and signs, **Verify** checks and
+explains, **Attack** stages the failure cases.
+
+The verdict is the loudest thing on the page and everything else is kept quiet
+around it. Beneath it, each check that weighed two values against each other
+prints both, aligned in the same columns and set in a monospaced face, so a
+divergence is visible by eye rather than asserted in prose — a reader can see
+*where* two digests part company, not merely that they do.
+
+Amber carries the interface: focus rings, the active tab, the primary button.
+Green and red are reserved for pass and fail alone, so nothing decorative ever
+competes with the one distinction the tool exists to draw.
 
 ## Keys
 
@@ -206,14 +315,55 @@ distribute only `demo_public.pem`.
 - The signature proves origin, not provenance. It shows a key holder protected
   this file at this time, not that the recording is a truthful capture of anything.
 - No robustness to processing. Recompression, resampling or format conversion
-  destroys the payload — re-saving a stego PNG as JPEG loses it entirely.
+  destroys the payload — re-saving a stego PNG as JPEG, or a stego WAV as MP3,
+  loses it entirely.
+- Audio hides less than it appears to. A quiet or near-silent passage has
+  little to mask the altered low bits, so depth that is inaudible in music can
+  be plainly audible in speech with pauses.
+- 24-bit PCM is unsupported: its samples have no native integer width, so they
+  cannot be addressed as whole carrier units without a bespoke packing step.
+- Encryption protects the message, not the record. The payload JSON — media ID,
+  timestamp, team, issuer — is readable by anyone who finds the start location,
+  because the verifier has to read it before deciding anything.
+- A hand-chosen start location is only as good as the number chosen. The
+  derivation exists because people pick round numbers near the beginning.
 - The derivation key is typed into a web form. On `127.0.0.1` that is fine, but
   over a network it would need HTTPS.
+- An extracted payload is still untrusted content. We fix its content type
+  ourselves and refuse to serve anything unrecognised inline, but a verified
+  signature only proves who protected the file, not that its payload is safe
+  to open.
+- Comparing the stego object against the original is a convenience, not part of
+  verification. A real verifier rarely holds the original, which is why the
+  verdict is reached from the received file alone.
+
+## Sample files
+
+Rebuild all of these with `python make_demo_files.py`. The passphrase is
+`team demo key`.
+
+| File | Case |
+|---|---|
+| `protected/P1_image_short_n2.png` | Image, short message, 2 LSB, plaintext |
+| `protected/P2_audio_large_n4.wav` | Audio, large message, 4 LSB, plaintext |
+| `protected/P3_image_custom_encrypted_n3.png` | Image, custom payload, 3 LSB, encrypted |
+| `protected/P4_audio_custom_encrypted_n2.wav` | Audio, custom payload, 2 LSB, encrypted |
+| `tampered/N1_image_edited.png` | Media edited outside the payload region |
+| `tampered/N6_audio_payload_bits_flipped.wav` | Payload bytes altered |
+| `tampered/N7_not_an_image.png` | Not a media file, renamed |
+| `tampered/N8_audio_replayed_payload.wav` | Genuine payload replayed into another cover |
+| `original/small_cover.png` | Too small to hold the large message |
+
+The remaining negative cases need no file of their own: `other_public.pem`
+against `P2` gives Signature Invalid, the wrong passphrase against `P1` gives
+Wrong Start Location, and either untouched cover gives Payload Missing.
+
+All six verdict categories are reachable, and `make_demo_files.py` demonstrates
+every one of them.
 
 ## Status
 
-Phases 0 and 1 complete: security foundations, shared bit operations, the PNG
-codec and the full verdict tree, all covered by the test suite. A protected and
-a tampered sample are in `testFiles/`.
-
-Audio codec and the web interface follow.
+Image and audio codecs, key separation, message encryption, the full verdict
+tree and the web interface are complete and covered by the test suite. Every
+sample in `testFiles/` is regenerated by `make_demo_files.py`, which also
+writes the run log in `evidence/`.

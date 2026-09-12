@@ -1,12 +1,18 @@
 """Sanity checks for the failures that are expensive to discover during the demo."""
 
+import hashlib
 import io
+import os
 import re
+import wave
 
 import numpy as np
 import pytest
 from PIL import Image
 
+import app as application
+import attacks
+import audio_helpers
 import image_helpers
 import security
 import stego_utils as su
@@ -402,3 +408,832 @@ def test_web_app_rejects_an_unaccepted_upload(client):
     ).get_data(as_text=True)
 
     assert "not an accepted format" in page
+
+
+# --- audio codec ---
+
+
+def write_wav(path, frames, channels=2, width=2, rate=44100, seed=11):
+    rng = np.random.default_rng(seed=seed)
+    dtype = {1: np.uint8, 2: np.int16, 4: np.int32}[width]
+    info = np.iinfo(dtype)
+    samples = rng.integers(info.min // 2, info.max // 2, size=frames * channels, dtype=dtype)
+    with wave.open(str(path), "wb") as out:
+        out.setnchannels(channels)
+        out.setsampwidth(width)
+        out.setframerate(rate)
+        out.writeframes(samples.astype(dtype).tobytes())
+    return path
+
+
+@pytest.fixture
+def wav(tmp_path):
+    return write_wav(tmp_path / "cover.wav", frames=30000)
+
+
+def protect_wav(wav, tmp_path, signer, message=b"a hidden message", lsb_n=2, **kwargs):
+    out = tmp_path / "stego.wav"
+    report = workflow.protect(wav, out, message, "note.txt", KEY, lsb_n, signer, **kwargs)
+    return out, report
+
+
+@pytest.mark.parametrize("width", [1, 2, 4])
+def test_every_supported_sample_width_round_trips(tmp_path, signer, width):
+    """8, 16 and 32-bit PCM all reduce to an unsigned carrier of that width."""
+    source = write_wav(tmp_path / f"cover{width}.wav", frames=30000, width=width)
+    out = tmp_path / f"stego{width}.wav"
+    workflow.protect(source, out, b"width test", "note.txt", KEY, 2, signer)
+
+    result = workflow.verify(out, KEY, signer.public_key())
+    assert result.verdict == workflow.AUTHENTIC
+    assert result.message == b"width test"
+
+
+def test_unsupported_sample_width_is_refused(tmp_path):
+    """24-bit has no native integer width, so its samples cannot be addressed."""
+    path = tmp_path / "24bit.wav"
+    with wave.open(str(path), "wb") as out:
+        out.setnchannels(1)
+        out.setsampwidth(3)
+        out.setframerate(44100)
+        out.writeframes(b"\x00\x01\x02" * 1000)
+
+    with pytest.raises(ValueError, match="24-bit"):
+        audio_helpers.load(path)
+
+
+def test_audio_save_preserves_the_container_format(wav, tmp_path, signer):
+    out, _ = protect_wav(wav, tmp_path, signer)
+
+    with wave.open(str(wav)) as before, wave.open(str(out)) as after:
+        assert after.getnchannels() == before.getnchannels()
+        assert after.getsampwidth() == before.getsampwidth()
+        assert after.getframerate() == before.getframerate()
+        assert after.getnframes() == before.getnframes()
+
+
+@pytest.mark.parametrize("lsb_n", range(1, 9))
+def test_protected_audio_verifies_at_every_depth(wav, tmp_path, signer, lsb_n):
+    out, _ = protect_wav(wav, tmp_path, signer, lsb_n=lsb_n)
+
+    result = workflow.verify(out, KEY, signer.public_key())
+    assert result.verdict == workflow.AUTHENTIC
+    assert result.message == b"a hidden message"
+
+
+def test_audio_embedding_only_touches_the_low_bits(wav, tmp_path, signer):
+    out, _ = protect_wav(wav, tmp_path, signer, lsb_n=2)
+
+    before = audio_helpers.load(wav).carrier
+    after = audio_helpers.load(out).carrier
+    assert np.array_equal(before >> np.uint16(2), after >> np.uint16(2))
+
+
+def test_audio_edit_outside_the_payload_region_is_tampered(wav, tmp_path, signer):
+    out, _ = protect_wav(wav, tmp_path, signer)
+
+    media = audio_helpers.load(out)
+    media.carrier[-50] ^= np.uint16(0b1000_0000)   # above the LSB region
+    media.save(out)
+
+    assert workflow.verify(out, KEY, signer.public_key()).verdict == workflow.TAMPERED
+
+
+def test_audio_edit_inside_the_payload_region_is_signature_invalid(wav, tmp_path, signer):
+    out, report = protect_wav(wav, tmp_path, signer)
+
+    media = audio_helpers.load(out)
+    media.carrier[report.offset + su.HEADER_UNITS + 40] ^= np.uint16(1)
+    media.save(out)
+
+    assert workflow.verify(out, KEY, signer.public_key()).verdict == workflow.SIGNATURE_INVALID
+
+
+def test_audio_wrong_public_key_is_signature_invalid(wav, tmp_path, signer):
+    out, _ = protect_wav(wav, tmp_path, signer)
+    stranger = security.generate_keypair()
+
+    assert workflow.verify(out, KEY, stranger.public_key()).verdict == workflow.SIGNATURE_INVALID
+
+
+def test_audio_wrong_derivation_key_is_wrong_start_location(wav, tmp_path, signer):
+    out, _ = protect_wav(wav, tmp_path, signer)
+
+    result = workflow.verify(out, b"not the key", signer.public_key())
+    assert result.verdict == workflow.WRONG_START_LOCATION
+
+
+def test_unprotected_audio_is_payload_missing(wav, signer):
+    assert workflow.verify(wav, KEY, signer.public_key()).verdict == workflow.PAYLOAD_MISSING
+
+
+def test_oversized_audio_payload_is_blocked_before_embedding(tmp_path, signer):
+    small = write_wav(tmp_path / "small.wav", frames=400, channels=1)
+    out = tmp_path / "stego.wav"
+
+    with pytest.raises(workflow.CapacityError):
+        workflow.protect(small, out, b"x" * 5000, "big.txt", KEY, 1, signer)
+
+    assert not out.exists()
+
+
+def test_audio_seed_is_read_from_the_container_not_the_filename(wav, tmp_path, signer):
+    """The transfer case renames the file; verification must survive that."""
+    out, _ = protect_wav(wav, tmp_path, signer)
+    renamed = tmp_path / "downloaded (1).wav"
+    renamed.write_bytes(out.read_bytes())
+
+    assert workflow.verify(renamed, KEY, signer.public_key()).verdict == workflow.AUTHENTIC
+
+
+def test_a_protected_audio_file_must_be_written_as_wav(wav, tmp_path, signer):
+    with pytest.raises(ValueError, match=".wav"):
+        workflow.protect(wav, tmp_path / "stego.png", b"hi", "n.txt", KEY, 1, signer)
+
+
+def test_image_and_audio_share_one_codec(wav, cover, tmp_path, signer):
+    """Both kinds run the identical embed/verify path; only loading differs."""
+    image_out, _ = protect_to(cover, tmp_path, signer, message=b"same message")
+    audio_out, _ = protect_wav(wav, tmp_path, signer, message=b"same message")
+
+    for path in (image_out, audio_out):
+        result = workflow.verify(path, KEY, signer.public_key())
+        assert result.verdict == workflow.AUTHENTIC
+        assert result.message == b"same message"
+
+
+# --- key separation and message encryption ---
+
+
+def test_subkeys_are_independent_and_deterministic():
+    location, message = su.derive_subkeys(KEY)
+
+    assert location != message
+    assert len(location) == 32 and len(message) == 32
+    assert su.derive_subkeys(KEY) == (location, message)
+    assert su.derive_subkeys(b"another passphrase")[0] != location
+
+
+def test_encrypt_round_trip_and_wrong_key():
+    key, stranger = os.urandom(32), os.urandom(32)
+    blob = security.encrypt_message(key, b"confidential")
+
+    assert blob != b"confidential"
+    assert security.decrypt_message(key, blob) == b"confidential"
+    assert security.decrypt_message(stranger, blob) is None
+
+
+def test_gcm_rejects_a_modified_ciphertext():
+    key = os.urandom(32)
+    blob = bytearray(security.encrypt_message(key, b"confidential"))
+    blob[-1] ^= 0x01                               # corrupt the tag
+
+    assert security.decrypt_message(key, bytes(blob)) is None
+
+
+def test_encrypted_message_round_trips_through_both_media(wav, cover, tmp_path, signer):
+    secret = b"Approved for release by the media desk."
+
+    for path, helper, name in ((cover, image_helpers, "s.png"), (wav, audio_helpers, "s.wav")):
+        out = tmp_path / name
+        workflow.protect(path, out, secret, "note.txt", KEY, 2, signer, encrypt=True)
+
+        result = workflow.verify(out, KEY, signer.public_key())
+        assert result.verdict == workflow.AUTHENTIC
+        assert result.message == secret
+        assert result.encrypted is True
+
+
+def read_stored_message(path, report):
+    """Everything an attacker gets once they know the start location: the
+    bytes sitting in the message region, with no key applied."""
+    carrier = workflow.load_media(path).carrier
+    payload_len = len(security.canonical_json(report.payload))
+    sig_len = report.payload["msg_len"] and 256 or 256
+    _, message_at = workflow.regions(report.offset, report.lsb_n, payload_len, sig_len)
+    return su.extract(carrier, message_at, report.payload["msg_len"], report.lsb_n)
+
+
+def test_plaintext_never_appears_in_an_encrypted_carrier(cover, tmp_path, signer):
+    """The point of encrypting: finding the hiding place is no longer enough."""
+    secret = b"MEETING AT MIDNIGHT BY THE DOCKS"
+
+    plain, plain_report = protect_to(cover, tmp_path, signer, message=secret, name="plain.png")
+    assert read_stored_message(plain, plain_report) == secret
+
+    sealed = tmp_path / "sealed.png"
+    sealed_report = workflow.protect(
+        cover, sealed, secret, "note.txt", KEY, 2, signer, encrypt=True
+    )
+    stored = read_stored_message(sealed, sealed_report)
+
+    assert secret not in stored
+    assert stored != secret
+    # And it is genuinely recoverable by the holder of the passphrase.
+    _, message_key = su.derive_subkeys(KEY)
+    assert security.decrypt_message(message_key, stored) == secret
+
+
+def test_signed_digest_covers_the_stored_bytes_not_the_plaintext(cover, tmp_path, signer):
+    """A plaintext digest in a record that travels in the clear would let a
+    short message be recovered by hashing candidates until one matched."""
+    secret = b"yes"
+    out = tmp_path / "sealed.png"
+    report = workflow.protect(cover, out, secret, "note.txt", KEY, 2, signer, encrypt=True)
+
+    assert report.payload["msg_sha256"] != hashlib.sha256(secret).hexdigest()
+    assert report.payload["msg_len"] > len(secret)     # nonce and tag included
+    assert report.plaintext_len == len(secret)
+
+
+def test_encryption_is_recorded_in_both_the_header_and_the_signed_record(cover, tmp_path, signer):
+    out = tmp_path / "sealed.png"
+    report = workflow.protect(cover, out, b"secret", "note.txt", KEY, 2, signer, encrypt=True)
+
+    carrier = image_helpers.load(out).carrier
+    header = su.parse_header(su.extract(carrier, report.offset, su.HEADER_SIZE, 1))
+
+    assert header["flags"] & su.FLAG_ENCRYPTED
+    assert report.payload["msg_encrypted"] is True
+
+
+def test_flipping_the_header_encryption_flag_is_tampered(cover, tmp_path, signer):
+    """The header is unsigned, so its flag is reconciled with the signed copy."""
+    out = tmp_path / "sealed.png"
+    report = workflow.protect(cover, out, b"secret", "note.txt", KEY, 2, signer, encrypt=True)
+
+    media = image_helpers.load(out)
+    header = su.build_header(report.lsb_n, 0, len(security.canonical_json(report.payload)), 256)
+    su.embed(media.carrier, report.offset, header, 1)
+    media.save(out)
+
+    result = workflow.verify(out, KEY, signer.public_key())
+    assert result.verdict == workflow.TAMPERED
+    assert "flag" in result.explanation
+
+
+def test_an_empty_message_is_never_marked_encrypted(cover, tmp_path, signer):
+    out = tmp_path / "empty.png"
+    report = workflow.protect(cover, out, b"", "note.txt", KEY, 2, signer, encrypt=True)
+
+    assert report.encrypted is False
+    assert workflow.verify(out, KEY, signer.public_key()).verdict == workflow.AUTHENTIC
+
+
+# --- the check trail ---
+
+
+def test_authentic_trail_records_every_check(cover, tmp_path, signer):
+    out, _ = protect_to(cover, tmp_path, signer)
+    result = workflow.verify(out, KEY, signer.public_key())
+
+    labels = [check["label"] for check in result.checks]
+    assert labels == [
+        "Container",
+        "Start location",
+        "Header",
+        "Signature",
+        "Depth",
+        "Encryption flag",
+        "Message digest",
+        "Media hash",
+    ]
+    assert all(check["ok"] for check in result.checks)
+
+
+def test_trail_stops_at_the_first_failure(cover, tmp_path, signer):
+    out, _ = protect_to(cover, tmp_path, signer)
+    stranger = security.generate_keypair()
+
+    result = workflow.verify(out, KEY, stranger.public_key())
+
+    assert result.checks[-1]["label"] == "Signature"
+    assert result.checks[-1]["ok"] is False
+    assert all(check["ok"] for check in result.checks[:-1])
+
+
+def test_trail_shows_both_sides_of_the_hash_comparison(cover, tmp_path, signer):
+    out, report = protect_to(cover, tmp_path, signer)
+    result = workflow.verify(out, KEY, signer.public_key())
+
+    media_hash = next(c for c in result.checks if c["label"] == "Media hash")
+    signed, recomputed = media_hash["compared"]
+
+    assert signed == ("signed", report.payload["hash"])
+    assert recomputed[1] == report.payload["hash"]      # both sides, in full, for alignment
+
+
+def test_decryption_step_appears_only_when_encrypted(cover, tmp_path, signer):
+    plain, _ = protect_to(cover, tmp_path, signer, name="plain.png")
+    sealed = tmp_path / "sealed.png"
+    workflow.protect(cover, sealed, b"secret", "note.txt", KEY, 2, signer, encrypt=True)
+
+    plain_labels = [c["label"] for c in workflow.verify(plain, KEY, signer.public_key()).checks]
+    sealed_labels = [c["label"] for c in workflow.verify(sealed, KEY, signer.public_key()).checks]
+
+    assert "Decryption" not in plain_labels
+    assert "Decryption" in sealed_labels
+
+
+# --- web app: audio and encryption ---
+
+
+def wav_bytes(frames=30000, channels=2, width=2, rate=44100, seed=13):
+    rng = np.random.default_rng(seed=seed)
+    dtype = {1: np.uint8, 2: np.int16, 4: np.int32}[width]
+    info = np.iinfo(dtype)
+    samples = rng.integers(info.min // 2, info.max // 2, size=frames * channels, dtype=dtype)
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as out:
+        out.setnchannels(channels)
+        out.setsampwidth(width)
+        out.setframerate(rate)
+        out.writeframes(samples.astype(dtype).tobytes())
+    return buffer.getvalue()
+
+
+def test_web_app_protects_and_verifies_audio(client):
+    """A protected sound must come back as .wav, not as the image default."""
+    web, _ = client
+    audio = wav_bytes()
+
+    page = post_multipart(
+        web,
+        "/protect",
+        {
+            "file": (io.BytesIO(audio), "cover.wav"),
+            "key": "shared key",
+            "lsb_n": "2",
+            "message": "hidden inside a sound file",
+        },
+    ).get_data(as_text=True)
+
+    stego_name = re.search(r"/media/([A-Za-z0-9_]+_stego\.wav)", page).group(1)
+    stego = web.get(f"/media/{stego_name}").get_data()
+
+    verdict_page = post_multipart(
+        web, "/verify", {"file": (io.BytesIO(stego), "stego.wav"), "key": "shared key"}
+    ).get_data(as_text=True)
+
+    assert workflow.AUTHENTIC in verdict_page
+    assert "hidden inside a sound file" in verdict_page
+
+
+def test_web_app_round_trips_an_encrypted_message(client):
+    web, image = client
+    secret = "confidential until the key is supplied"
+
+    page = post_multipart(
+        web,
+        "/protect",
+        {
+            "file": (io.BytesIO(image), "cover.png"),
+            "key": "shared key",
+            "lsb_n": "2",
+            "message": secret,
+            "encrypt": "on",
+        },
+    ).get_data(as_text=True)
+
+    assert "msg_encrypted" in page and "true" in page   # JSON is HTML-escaped in the page
+
+    stego_name = re.search(r"/media/([A-Za-z0-9_]+_stego\.png)", page).group(1)
+    stego = web.get(f"/media/{stego_name}").get_data()
+
+    verdict_page = post_multipart(
+        web, "/verify", {"file": (io.BytesIO(stego), "stego.png"), "key": "shared key"}
+    ).get_data(as_text=True)
+
+    assert workflow.AUTHENTIC in verdict_page
+    assert secret in verdict_page
+
+
+def test_verify_page_shows_the_check_trail(client):
+    web, image = client
+
+    page = post_multipart(
+        web,
+        "/protect",
+        {"file": (io.BytesIO(image), "cover.png"), "key": "k", "lsb_n": "2", "message": "hi"},
+    ).get_data(as_text=True)
+    stego_name = re.search(r"/media/([A-Za-z0-9_]+_stego\.png)", page).group(1)
+    stego = web.get(f"/media/{stego_name}").get_data()
+
+    verdict_page = post_multipart(
+        web, "/verify", {"file": (io.BytesIO(stego), "stego.png"), "key": "k"}
+    ).get_data(as_text=True)
+
+    for label in ("Start location", "Signature", "Message digest", "Media hash"):
+        assert label in verdict_page
+
+
+def test_web_app_reports_encryption_overhead(client):
+    web, image = client
+
+    body = post_multipart(
+        web, "/upload", {"file": (io.BytesIO(image), "cover.png"), "key": "k"}
+    ).get_json()
+
+    assert body["encryption_overhead"] == security.NONCE_BYTES + 16
+
+
+# --- payload rendering and safe serving ---
+
+
+def test_payload_type_is_sniffed_from_bytes_not_the_name():
+    png = io.BytesIO()
+    Image.fromarray(np.zeros((4, 4, 3), dtype=np.uint8), "RGB").save(png, format="PNG")
+
+    assert application.sniff_payload(png.getvalue()) == ("image", "image/png")
+    assert application.sniff_payload(wav_bytes(frames=10))[0] == "audio"
+    assert application.sniff_payload(b"plain words") == ("text", "text/plain")
+    assert application.sniff_payload(b"\x00\x01\x02\xff\xfe") == ("binary", "application/octet-stream")
+
+
+def test_html_payload_is_never_served_as_markup(client):
+    """msg_name travels inside the payload, so it is chosen by whoever
+    protected the file. Trusting it to pick a content type would let a hidden
+    page run in the verifying browser."""
+    web, image = client
+    script = b"<html><script>alert(1)</script></html>"
+
+    page = post_multipart(
+        web,
+        "/protect",
+        {
+            "file": (io.BytesIO(image), "cover.png"),
+            "key": "k",
+            "lsb_n": "2",
+            "message_file": (io.BytesIO(script), "note.html"),
+        },
+    ).get_data(as_text=True)
+    stego_name = re.search(r"/media/([A-Za-z0-9_]+_stego\.png)", page).group(1)
+    stego = web.get(f"/media/{stego_name}").get_data()
+
+    verdict_page = post_multipart(
+        web, "/verify", {"file": (io.BytesIO(stego), "s.png"), "key": "k"}
+    ).get_data(as_text=True)
+
+    payload_url = re.search(r"/payload/([A-Za-z0-9_.]+)", verdict_page).group(0)
+    served = web.get(payload_url)
+
+    assert "text/html" not in served.headers["Content-Type"]
+    assert served.data == script
+
+
+def test_an_extracted_image_payload_is_displayed(client):
+    """The spec asks the GUI to play or execute the payload, not just find it."""
+    web, image = client
+    hidden = io.BytesIO()
+    Image.fromarray(np.full((8, 8, 3), 120, dtype=np.uint8), "RGB").save(hidden, format="PNG")
+    hidden_bytes = hidden.getvalue()
+
+    page = post_multipart(
+        web,
+        "/protect",
+        {
+            "file": (io.BytesIO(image), "cover.png"),
+            "key": "k",
+            "lsb_n": "4",
+            "message_file": (io.BytesIO(hidden_bytes), "secret.png"),
+        },
+    ).get_data(as_text=True)
+    stego_name = re.search(r"/media/([A-Za-z0-9_]+_stego\.png)", page).group(1)
+    stego = web.get(f"/media/{stego_name}").get_data()
+
+    verdict_page = post_multipart(
+        web, "/verify", {"file": (io.BytesIO(stego), "s.png"), "key": "k"}
+    ).get_data(as_text=True)
+
+    assert workflow.AUTHENTIC in verdict_page
+    assert "<img src=\"/payload/" in verdict_page
+
+    payload_url = re.search(r"/payload/([A-Za-z0-9_.]+)", verdict_page).group(0)
+    served = web.get(payload_url)
+    assert served.headers["Content-Type"].startswith("image/png")
+    assert served.data == hidden_bytes
+
+
+def test_an_extracted_audio_payload_is_playable(client):
+    web, image = client
+    hidden = wav_bytes(frames=800, channels=1)
+
+    page = post_multipart(
+        web,
+        "/protect",
+        {
+            "file": (io.BytesIO(image), "cover.png"),
+            "key": "k",
+            "lsb_n": "4",
+            "message_file": (io.BytesIO(hidden), "secret.wav"),
+        },
+    ).get_data(as_text=True)
+    stego_name = re.search(r"/media/([A-Za-z0-9_]+_stego\.png)", page).group(1)
+    stego = web.get(f"/media/{stego_name}").get_data()
+
+    verdict_page = post_multipart(
+        web, "/verify", {"file": (io.BytesIO(stego), "s.png"), "key": "k"}
+    ).get_data(as_text=True)
+
+    assert "<audio controls src=\"/payload/" in verdict_page
+
+
+def test_verify_shows_the_original_beside_the_received_file(client):
+    web, image = client
+
+    page = post_multipart(
+        web,
+        "/protect",
+        {"file": (io.BytesIO(image), "cover.png"), "key": "k", "lsb_n": "2", "message": "hi"},
+    ).get_data(as_text=True)
+    stego_name = re.search(r"/media/([A-Za-z0-9_]+_stego\.png)", page).group(1)
+    stego = web.get(f"/media/{stego_name}").get_data()
+
+    with_original = post_multipart(
+        web,
+        "/verify",
+        {
+            "file": (io.BytesIO(stego), "s.png"),
+            "original": (io.BytesIO(image), "cover.png"),
+            "key": "k",
+        },
+    ).get_data(as_text=True)
+    caption = "<figcaption>Original cover &mdash; before protection</figcaption>"
+    assert caption in with_original                  # the figure, not the form label
+
+    # And the verdict must not depend on having it.
+    without = post_multipart(
+        web, "/verify", {"file": (io.BytesIO(stego), "s.png"), "key": "k"}
+    ).get_data(as_text=True)
+    assert workflow.AUTHENTIC in without
+    assert caption not in without
+
+
+def test_a_non_media_file_renamed_to_png_is_cannot_verify(tmp_path, signer):
+    path = tmp_path / "not_an_image.png"
+    path.write_bytes(b"just some text that has been renamed " * 10)
+
+    assert workflow.verify(path, KEY, signer.public_key()).verdict == workflow.CANNOT_VERIFY
+
+
+def test_every_verdict_category_is_reachable(cover, wav, tmp_path, signer):
+    """All six verdicts exist in the code; all six must be demonstrable."""
+    seen = set()
+
+    out, report = protect_to(cover, tmp_path, signer)
+    seen.add(workflow.verify(out, KEY, signer.public_key()).verdict)                  # Authentic
+    seen.add(workflow.verify(out, KEY, security.generate_keypair().public_key()).verdict)
+    seen.add(workflow.verify(out, b"wrong", signer.public_key()).verdict)             # Wrong Start
+    seen.add(workflow.verify(cover, KEY, signer.public_key()).verdict)                # Missing
+
+    junk = tmp_path / "junk.png"
+    junk.write_bytes(b"not an image at all " * 20)
+    seen.add(workflow.verify(junk, KEY, signer.public_key()).verdict)                 # Cannot Verify
+
+    media = image_helpers.load(out)
+    media.carrier[-20] ^= np.uint8(0b1000_0000)
+    media.save(out)
+    seen.add(workflow.verify(out, KEY, signer.public_key()).verdict)                  # Tampered
+
+    assert seen == {
+        workflow.AUTHENTIC,
+        workflow.TAMPERED,
+        workflow.SIGNATURE_INVALID,
+        workflow.PAYLOAD_MISSING,
+        workflow.WRONG_START_LOCATION,
+        workflow.CANNOT_VERIFY,
+    }
+
+
+# --- selectable start location ---
+
+
+def test_a_chosen_offset_is_used_verbatim(cover, tmp_path, signer):
+    out = tmp_path / "stego.png"
+    report = workflow.protect(cover, out, b"hi", "n.txt", KEY, 2, signer, offset=7777)
+
+    assert report.offset == 7777
+    assert workflow.verify(out, KEY, signer.public_key(), offset=7777).verdict == workflow.AUTHENTIC
+
+
+def test_a_chosen_offset_reaches_past_the_derived_half(cover, tmp_path, signer):
+    """The derivation is confined to the first half; choosing is not."""
+    units = len(image_helpers.load(cover).carrier)
+    late = int(units * 0.75)
+
+    out = tmp_path / "stego.png"
+    report = workflow.protect(cover, out, b"hi", "n.txt", KEY, 4, signer, offset=late)
+
+    assert report.offset > units // 2
+    assert workflow.verify(out, KEY, signer.public_key(), offset=late).verdict == workflow.AUTHENTIC
+
+
+def test_the_verifier_must_be_told_a_chosen_offset(cover, tmp_path, signer):
+    out = tmp_path / "stego.png"
+    workflow.protect(cover, out, b"hi", "n.txt", KEY, 2, signer, offset=7777)
+
+    # Deriving instead of being told looks in the wrong place.
+    assert workflow.verify(out, KEY, signer.public_key()).verdict == workflow.WRONG_START_LOCATION
+    assert workflow.verify(out, KEY, signer.public_key(), 7778).verdict == workflow.WRONG_START_LOCATION
+
+
+def test_a_chosen_offset_is_not_recorded_in_the_payload(cover, tmp_path, signer):
+    """It cannot be: the verifier needs it before it can read anything."""
+    out = tmp_path / "stego.png"
+    report = workflow.protect(cover, out, b"hi", "n.txt", KEY, 2, signer, offset=7777)
+
+    assert "7777" not in security.canonical_json(report.payload).decode()
+
+
+def test_an_offset_beyond_the_carrier_is_refused(cover, tmp_path, signer):
+    units = len(image_helpers.load(cover).carrier)
+
+    with pytest.raises(ValueError, match="start location"):
+        workflow.protect(cover, tmp_path / "s.png", b"hi", "n.txt", KEY, 2, signer, offset=units)
+    with pytest.raises(ValueError, match="start location"):
+        workflow.protect(cover, tmp_path / "s.png", b"hi", "n.txt", KEY, 2, signer, offset=-1)
+
+
+def test_an_offset_too_late_to_fit_the_payload_is_a_capacity_error(cover, tmp_path, signer):
+    units = len(image_helpers.load(cover).carrier)
+
+    with pytest.raises(workflow.CapacityError):
+        workflow.protect(cover, tmp_path / "s.png", b"x" * 400, "n.txt", KEY, 1, signer,
+                         offset=units - 50)
+
+
+def test_web_app_round_trips_a_chosen_offset(client):
+    web, image = client
+
+    page = post_multipart(
+        web,
+        "/protect",
+        {
+            "file": (io.BytesIO(image), "cover.png"),
+            "key": "k",
+            "lsb_n": "2",
+            "offset": "5000",
+            "message": "chosen location",
+        },
+    ).get_data(as_text=True)
+    assert "5,000" in page
+
+    stego_name = re.search(r"/media/([A-Za-z0-9_]+_stego\.png)", page).group(1)
+    stego = web.get(f"/media/{stego_name}").get_data()
+
+    good = post_multipart(
+        web, "/verify", {"file": (io.BytesIO(stego), "s.png"), "key": "k", "offset": "5000"}
+    ).get_data(as_text=True)
+    assert workflow.AUTHENTIC in good
+
+    blank = post_multipart(
+        web, "/verify", {"file": (io.BytesIO(stego), "s.png"), "key": "k"}
+    ).get_data(as_text=True)
+    assert workflow.WRONG_START_LOCATION in blank
+
+
+def test_a_non_numeric_offset_is_rejected(client):
+    web, image = client
+
+    page = post_multipart(
+        web,
+        "/protect",
+        {"file": (io.BytesIO(image), "c.png"), "key": "k", "lsb_n": "2",
+         "message": "x", "offset": "halfway"},
+    ).get_data(as_text=True)
+
+    assert "whole number" in page
+
+
+# --- attack simulation module ---
+
+
+@pytest.fixture
+def attacked(cover, tmp_path, signer):
+    source = tmp_path / "target.png"
+    workflow.protect(cover, source, b"a secret worth protecting", "n.txt", KEY, 2, signer,
+                     encrypt=True)
+    return source
+
+
+def test_every_attack_produces_the_verdict_it_predicts(attacked, wav, tmp_path, signer):
+    outcomes = attacks.run_all(attacked, KEY, signer.public_key(), tmp_path, target_path=wav)
+
+    assert len(outcomes) == len(attacks.ATTACKS)
+    for outcome in outcomes:
+        assert outcome.ran, f"{outcome.attack.key} was skipped: {outcome.note}"
+        assert outcome.as_expected, (
+            f"{outcome.attack.key}: predicted {outcome.expected}, got {outcome.verdict}"
+        )
+
+
+def test_the_attacks_between_them_reach_four_distinct_verdicts(attacked, wav, tmp_path, signer):
+    verdicts = {o.verdict for o in attacks.run_all(attacked, KEY, signer.public_key(), tmp_path, wav)}
+
+    assert verdicts == {
+        workflow.TAMPERED,
+        workflow.SIGNATURE_INVALID,
+        workflow.PAYLOAD_MISSING,
+        workflow.WRONG_START_LOCATION,
+    }
+
+
+def test_attacks_never_modify_the_file_they_are_given(attacked, wav, tmp_path, signer):
+    before = attacked.read_bytes()
+    attacks.run_all(attacked, KEY, signer.public_key(), tmp_path, target_path=wav)
+
+    assert attacked.read_bytes() == before
+
+
+def test_retouching_the_media_leaves_the_signature_valid(attacked, tmp_path, signer):
+    """The whole reason a media hash is needed: the signature cannot see this."""
+    outcome = attacks.run(attacks.BY_KEY["edit_media"], attacked, KEY, signer.public_key(), tmp_path)
+    result = workflow.verify(outcome.path, KEY, signer.public_key())
+
+    assert result.verdict == workflow.TAMPERED
+    signature_check = next(c for c in result.checks if c["label"] == "Signature")
+    assert signature_check["ok"] is True
+
+
+def test_a_replayed_payload_is_genuinely_signed_but_still_rejected(attacked, wav, tmp_path, signer):
+    """Nothing is forged. The record simply describes a different file."""
+    outcome = attacks.run(
+        attacks.BY_KEY["transplant"], attacked, KEY, signer.public_key(), tmp_path, target_path=wav
+    )
+    result = workflow.verify(outcome.path, KEY, signer.public_key())
+
+    assert result.verdict == workflow.TAMPERED
+    assert next(c for c in result.checks if c["label"] == "Signature")["ok"] is True
+    assert next(c for c in result.checks if c["label"] == "Media hash")["ok"] is False
+
+
+def test_media_edits_are_invisible_at_full_depth(cover, tmp_path, signer):
+    """A real limit, reported rather than hidden: at 8 LSB the masked hash
+    covers no bits at all, so it cannot detect an edit."""
+    source = tmp_path / "full_depth.png"
+    workflow.protect(cover, source, b"x", "n.txt", KEY, 8, signer)
+
+    outcome = attacks.run(attacks.BY_KEY["edit_media"], source, KEY, signer.public_key(), tmp_path)
+
+    assert outcome.expected == workflow.AUTHENTIC
+    assert outcome.verdict == workflow.AUTHENTIC
+    assert "8 LSB" in outcome.caveat
+
+
+def test_replay_between_two_protections_of_one_cover_succeeds(cover, tmp_path, signer):
+    """Also reported rather than hidden: the record binds to media content,
+    not to one instance of it."""
+    first, second = tmp_path / "first.png", tmp_path / "second.png"
+    workflow.protect(cover, first, b"first", "n.txt", KEY, 2, signer)
+    workflow.protect(cover, second, b"second", "n.txt", KEY, 2, signer)
+
+    outcome = attacks.run(
+        attacks.BY_KEY["transplant"], first, KEY, signer.public_key(), tmp_path, target_path=second
+    )
+
+    assert outcome.verdict == workflow.AUTHENTIC     # the weakness reproduces
+    assert "same" in outcome.caveat
+
+
+def test_attacks_skip_cleanly_when_they_cannot_apply(cover, tmp_path, signer):
+    empty = tmp_path / "empty.png"
+    workflow.protect(cover, empty, b"", "n.txt", KEY, 2, signer)
+
+    no_message = attacks.run(attacks.BY_KEY["corrupt_message"], empty, KEY, signer.public_key(), tmp_path)
+    no_target = attacks.run(attacks.BY_KEY["transplant"], empty, KEY, signer.public_key(), tmp_path)
+
+    assert not no_message.ran and "no message" in no_message.note
+    assert not no_target.ran and "second cover" in no_target.note
+
+
+def test_attacking_an_unprotected_file_reports_that_there_is_nothing_to_attack(cover, tmp_path, signer):
+    outcome = attacks.run(attacks.BY_KEY["edit_media"], cover, KEY, signer.public_key(), tmp_path)
+
+    assert not outcome.ran
+    assert "no payload" in outcome.note
+
+
+def test_attack_page_runs_every_attack(client, tmp_path):
+    web, image = client
+
+    page = post_multipart(
+        web,
+        "/protect",
+        {"file": (io.BytesIO(image), "c.png"), "key": "k", "lsb_n": "2", "message": "secret"},
+    ).get_data(as_text=True)
+    stego_name = re.search(r"/media/([A-Za-z0-9_]+_stego\.png)", page).group(1)
+    stego = web.get(f"/media/{stego_name}").get_data()
+
+    results = post_multipart(
+        web,
+        "/attack",
+        {
+            "file": (io.BytesIO(stego), "s.png"),
+            "target": (io.BytesIO(wav_bytes()), "other.wav"),
+            "key": "k",
+        },
+    ).get_data(as_text=True)
+
+    assert "8 of 8 attacks produced" in results
+    for attack in attacks.ATTACKS:
+        assert attack.label in results

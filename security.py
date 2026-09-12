@@ -9,11 +9,16 @@ from datetime import datetime, timezone
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
-from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.exceptions import InvalidSignature, InvalidTag
+
+# GCM's standard nonce length. Twelve bytes is the size the mode is specified
+# around; other lengths are permitted but get hashed internally for no gain.
+NONCE_BYTES = 12
 
 # The one place to edit if the team label changes. It is FR3 "team-defined
 # metadata" only; nothing in the format depends on its value.
-TEAM = "P1-4"
+TEAM = "P1-2"
 ISSUER = "INF2005 ACW1 Media Verification"
 
 PAYLOAD_VERSION = 1
@@ -51,6 +56,16 @@ def build_payload(media_type, media_hash, lsb_n, message, message_name, encrypte
     JSON, so a large message is not inflated by base64. Its length and digest
     live here, which means both are covered by the signature: an attacker
     cannot lie about how long the message is.
+
+    `message` is always the bytes as *stored in the carrier* — ciphertext when
+    the message is encrypted, plaintext when it is not. Digesting the stored
+    form rather than the plaintext matters twice over. It lets the verifier
+    confirm the extracted bytes are intact before it tries to decrypt them,
+    and it keeps a plaintext fingerprint out of a record that travels in the
+    clear: a short, guessable message would otherwise be recoverable by
+    hashing candidates until one matched, which would undo the encryption.
+    Plaintext integrity is not lost — GCM's tag covers it, and the tag is
+    inside the ciphertext this digest already commits to.
     """
     return {
         "v": PAYLOAD_VERSION,
@@ -67,6 +82,33 @@ def build_payload(media_type, media_hash, lsb_n, message, message_name, encrypte
         "msg_name": message_name,
         "msg_encrypted": encrypted,
     }
+
+
+def encrypt_message(key, plaintext):
+    """AES-256-GCM. Returns nonce || ciphertext || tag as one blob.
+
+    Steganography hides that a message exists; it does not protect the message
+    once found. Anyone who learns the start location can read an unencrypted
+    payload straight out of the carrier, so confidentiality needs a cipher,
+    not just concealment.
+
+    GCM is authenticated encryption: the tag makes a modified ciphertext fail
+    to decrypt rather than decrypt to garbage. The 12-byte nonce is random per
+    message and travels in the clear, which is safe and necessary — the same
+    key encrypting two messages under one nonce would be a real break.
+    """
+    nonce = os.urandom(NONCE_BYTES)
+    return nonce + AESGCM(key).encrypt(nonce, plaintext, None)
+
+
+def decrypt_message(key, blob):
+    """Reverse encrypt_message. Returns None if the key or the bytes are wrong."""
+    if len(blob) <= NONCE_BYTES:
+        return None
+    try:
+        return AESGCM(key).decrypt(blob[:NONCE_BYTES], blob[NONCE_BYTES:], None)
+    except InvalidTag:
+        return None
 
 
 def sign(private_key, data):

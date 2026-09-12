@@ -6,9 +6,10 @@ import json
 import uuid
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template, request, send_from_directory, url_for
+from flask import Flask, abort, jsonify, render_template, request, send_from_directory, url_for
 from werkzeug.utils import secure_filename
 
+import attacks
 import security
 import workflow
 
@@ -51,6 +52,20 @@ def store_upload(field, allowed=MEDIA_SUFFIXES, required=True):
     path = WORKSPACE / stored
     upload.save(path)
     return stored, path
+
+
+def chosen_offset():
+    """The start location the user typed, or None to derive it."""
+    raw = (request.form.get("offset") or "").strip().replace(",", "")
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        raise InputError("the start location must be a whole number, or left blank")
+    if value < 0:
+        raise InputError("the start location cannot be negative")
+    return value
 
 
 def derivation_key():
@@ -106,6 +121,29 @@ def media(filename):
     return send_from_directory(WORKSPACE, filename)
 
 
+@app.get("/payload/<path:filename>")
+def payload(filename):
+    """Serve an extracted message under a content type we determined ourselves.
+
+    Anything we cannot positively identify is sent as an attachment with a
+    generic type, so an extracted file is never interpreted as markup by the
+    browser that is checking it.
+    """
+    path = WORKSPACE / secure_filename(filename)
+    if not path.is_file():
+        abort(404)
+
+    kind, mimetype = sniff_payload(path.read_bytes())
+    inline = kind in {"image", "audio", "text"}
+    return send_from_directory(
+        WORKSPACE,
+        path.name,
+        mimetype=mimetype,
+        as_attachment=not inline,
+        download_name=path.name,
+    )
+
+
 @app.post("/upload")
 def upload():
     """Store a cover object and report its capacity at every depth at once,
@@ -113,7 +151,7 @@ def upload():
     try:
         stored, path = store_upload("file")
         media_object = workflow.load_media(path)
-        report = workflow.capacity_report(media_object, derivation_key())
+        report = workflow.capacity_report(media_object, derivation_key(), chosen_offset())
     except (InputError, workflow.UnsupportedMedia, OSError, ValueError) as exc:
         return jsonify({"error": str(exc)}), 400
 
@@ -147,10 +185,14 @@ def protect():
         lsb_n = int(request.form.get("lsb_n", 1))
         message, message_name = message_from_form()
 
+        kind = workflow.media_kind(cover_path)
         context["cover_url"] = url_for("media", filename=stored)
         context["cover"] = workflow.load_media(cover_path).describe()
+        context["kind"] = kind
 
-        output_name = f"{uuid.uuid4().hex[:8]}_stego.png"
+        # The protected file has to keep its own kind: a WAV written with a
+        # .png suffix would be unopenable by either decoder.
+        output_name = f"{uuid.uuid4().hex[:8]}_stego{workflow.STEGO_SUFFIX[kind]}"
         report = workflow.protect(
             cover_path,
             WORKSPACE / output_name,
@@ -159,6 +201,8 @@ def protect():
             key,
             lsb_n,
             security.load_private_key(DEFAULT_PRIVATE_KEY),
+            encrypt=request.form.get("encrypt") == "on",
+            offset=chosen_offset(),
         )
 
         context["report"] = report
@@ -183,32 +227,103 @@ def verify():
         context["stego_url"] = url_for("media", filename=stored)
         context["key_name"] = key_name
         context["key_fingerprint"] = fingerprint
+        context["kind"] = workflow.media_kind(path)
 
-        result = workflow.verify(path, key, public_key)
+        # Optional: the untouched cover, so the two can be compared on screen.
+        original_name, original_path = store_upload("original", required=False)
+        if original_name:
+            context["cover_url"] = url_for("media", filename=original_name)
+            context["cover_kind"] = workflow.media_kind(original_path)
+
+        result = workflow.verify(path, key, public_key, chosen_offset())
         context["result"] = result
 
         if result.payload:
             context["payload_json"] = json.dumps(result.payload, indent=2)
         if result.message:
             context.update(present_message(result))
-    except (InputError, OSError, ValueError) as exc:
+    except (InputError, workflow.UnsupportedMedia, OSError, ValueError) as exc:
         context["error"] = str(exc)
 
     return render_template("verify.html", **context)
 
 
+# Sniffed from the bytes themselves, never from the name. The name travels
+# inside the payload, so it is chosen by whoever protected the file: trusting
+# it to pick a content type would let a hidden "note.html" full of script be
+# served back as HTML and run in the verifier's browser.
+MAGIC = (
+    (b"\x89PNG\r\n\x1a\n", "image", "image/png"),
+    (b"\xff\xd8\xff", "image", "image/jpeg"),
+    (b"GIF87a", "image", "image/gif"),
+    (b"GIF89a", "image", "image/gif"),
+    (b"BM", "image", "image/bmp"),
+)
+
+
+def sniff_payload(data):
+    """Return (kind, mimetype) for an extracted message."""
+    for prefix, kind, mimetype in MAGIC:
+        if data.startswith(prefix):
+            return kind, mimetype
+    if data[:4] == b"RIFF" and data[8:12] == b"WAVE":
+        return "audio", "audio/wav"
+    try:
+        data.decode("utf-8")
+    except UnicodeDecodeError:
+        return "binary", "application/octet-stream"
+    return "text", "text/plain"
+
+
 def present_message(result):
-    """Show a text payload inline; offer any other payload as a download."""
+    """Render a payload the GUI can display or play; offer the rest as a
+    download. The spec asks the interface to play or execute the payload, not
+    just report that one was found."""
     name = result.payload.get("msg_name", "payload.bin")
+    kind, mimetype = sniff_payload(result.message)
+
     stored = f"{uuid.uuid4().hex[:8]}_{secure_filename(name)}"
     (WORKSPACE / stored).write_bytes(result.message)
 
-    context = {"message_url": url_for("media", filename=stored), "message_name": name}
-    try:
+    context = {
+        "message_url": url_for("payload", filename=stored),
+        "message_name": name,
+        "message_kind": kind,
+        "message_bytes": len(result.message),
+    }
+    if kind == "text":
         context["message_text"] = result.message.decode("utf-8")
-    except UnicodeDecodeError:
-        pass
     return context
+
+
+@app.get("/attack")
+def attack_page():
+    return render_template("attack.html", attacks=attacks.ATTACKS, keys=available_public_keys())
+
+
+@app.post("/attack")
+def attack():
+    context = {"attacks": attacks.ATTACKS, "keys": available_public_keys()}
+    try:
+        stored, path = store_upload("file")
+        _, target = store_upload("target", required=False)
+        public_key, key_name, fingerprint = public_key_from_form()
+
+        outcomes = attacks.run_all(
+            path, derivation_key(), public_key, WORKSPACE, target, chosen_offset()
+        )
+        context.update(
+            outcomes=outcomes,
+            stego_url=url_for("media", filename=stored),
+            kind=workflow.media_kind(path),
+            key_name=key_name,
+            key_fingerprint=fingerprint,
+            ran=sum(1 for o in outcomes if o.ran),
+            matched=sum(1 for o in outcomes if o.as_expected),
+        )
+    except (InputError, workflow.UnsupportedMedia, OSError, ValueError) as exc:
+        context["error"] = str(exc)
+    return render_template("attack.html", **context)
 
 
 @app.errorhandler(413)
