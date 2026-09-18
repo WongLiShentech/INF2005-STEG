@@ -56,6 +56,27 @@ CUSTOM = (
 
 log_lines = []
 
+WALKTHROUGH_SAMPLES = [
+    ("image_small.png", "Small", "image", (48, 48)),
+    ("image_medium.png", "Medium", "image", (420, 320)),
+    ("image_large.png", "Large", "image", (1920, 1080)),
+    ("audio_short.wav", "Short", "audio", 1),
+    ("audio_medium.wav", "Medium", "audio", 6),
+    ("audio_long.wav", "Long", "audio", 30),
+]
+
+
+def make_walkthrough_samples(directory=ORIGINAL):
+    """Create missing size variants in the existing sample directory."""
+    for name, _label, kind, size in WALKTHROUGH_SAMPLES:
+        path = directory / name
+        if path.exists():
+            continue
+        if kind == "image":
+            make_cover_image(path, *size)
+        else:
+            make_cover_audio(path, seconds=size)
+
 
 def log(line=""):
     print(line)
@@ -138,6 +159,7 @@ def main():
     cover_png = make_cover_image(ORIGINAL / "cover.png")
     cover_wav = make_cover_audio(ORIGINAL / "cover.wav")
     small_png = make_small_cover(ORIGINAL / "small_cover.png")
+    make_walkthrough_samples()
     log(f"Cover image  {workflow.load_media(cover_png).describe()}")
     log(f"Cover audio  {workflow.load_media(cover_wav).describe()}")
     log(f"Small cover  {workflow.load_media(small_png).describe()}")

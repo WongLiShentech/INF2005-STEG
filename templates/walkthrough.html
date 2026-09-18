@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>STEG / Demonstration studio</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='walkthrough.css', v='wizard5') }}">
+</head>
+<body>
+<header>
+<div class="brand">STEG<span>.</span> <span class="muted" style="font-size:11px;letter-spacing:1px;font-weight:400">DEMONSTRATION STUDIO</span>
+</div>
+</header>
+<main>
+<noscript>
+<p>This walkthrough requires JavaScript. Use the standalone Protect and Verify pages for regular form submissions.</p>
+</noscript>
+<div class="hero">
+<div>
+<div class="eyebrow">INF2005 / ACW1</div>
+<h1>Steganography</h1>
+</div>
+<span class="muted">Encode / Transfer / Verify</span>
+</div>
+<p id="connection-error" class="error" role="alert">
+</p>
+<div class="workspace-tabs" role="tablist" aria-label="Workspace">
+<button id="demo-tab" role="tab" aria-selected="true" aria-controls="demo-panel" tabindex="0">Demo</button>
+<button id="analysis-tab" role="tab" aria-selected="false" aria-controls="analysis-panel" tabindex="-1">Stego analysis <span id="run-count">0</span></button>
+</div>
+<div id="demo-panel" role="tabpanel" aria-labelledby="demo-tab">
+<nav class="progress" aria-label="Walkthrough stages">
+</nav>
+<div class="layout">
+<div id="journey">
+<section class="stage" id="s1">
+<div class="stage-head">
+<span class="number">01</span>
+<div>
+<div class="eyebrow">Party A / Sender</div>
+<h2>Cover</h2>
+</div>
+</div>
+<div class="tabs" id="media-tabs" role="group" aria-label="Cover type">
+<button data-kind="image" class="selected" aria-pressed="true">Image</button>
+<button data-kind="audio" aria-pressed="false">Audio</button>
+<button disabled title="Not supported by the current backend">Video / unavailable</button>
+</div>
+<div id="video-note" class="notice warn" hidden>Video / concept only</div>
+<div class="cover-grid" id="covers">
+</div>
+<label class="upload">Local cover <span class="muted">/ local demo server</span>
+<input id="cover-file" type="file" accept=".png,.bmp,.jpg,.jpeg,.wav">
+</label>
+<div id="local-preview">
+</div>
+<p id="cover-error" class="error" role="alert">
+</p>
+<div class="action">
+<small id="cover-detail">
+</small>
+<button class="primary" id="choose-cover">Continue →</button>
+</div>
+</section>
+<section class="stage" id="s2" hidden>
+<div class="stage-head">
+<span class="number">02</span>
+<div>
+<div class="eyebrow">Party A / Sender</div>
+<h2>Payload</h2>
+</div>
+</div>
+<fieldset id="payload-fields" style="border:0;padding:0;margin:0">
+<div class="tabs" id="payload-tabs">
+<button data-mode="text" class="selected" type="button">Text</button>
+<button data-mode="file" type="button">File</button>
+</div>
+<label class="field" id="text-label">Message<textarea id="message">
+</textarea>
+</label>
+<label class="field payload-upload" id="file-label" hidden>Payload file<input type="file" id="payload-file" aria-describedby="payload-file-info payload-error"><span id="payload-file-info" class="muted">Select a file to check its size automatically.</span>
+</label>
+<p class="error" id="payload-error" role="alert">
+</p>
+<div class="fields">
+<label class="field">Sender passphrase<input id="sender-pass" type="password" placeholder="Passphrase" autocomplete="off">
+</label>
+<label class="field">LSB depth <span id="depth-label">2</span> / 8<input id="depth" type="range" min="1" max="8" value="2">
+</label>
+</div>
+<label>
+<input id="encrypt" type="checkbox" checked> AES-256-GCM encryption</label>
+<div class="notice">
+<div class="row-flex">
+<strong id="capacity">Calculate using your passphrase and start position.</strong>
+<button class="secondary" type="button" id="inspect">Calculate</button>
+</div>
+<div class="meter">
+<div id="capacity-bar">
+</div>
+</div>
+<span id="capacity-detail">
+</span>
+</div>
+<details>
+<summary>Start position override (optional)</summary>
+<label class="field">Carrier index (whole number, starting at 0)<input id="offset" type="number" inputmode="numeric" min="0" step="1" placeholder="Leave blank for automatic position">
+</label>
+</details>
+</fieldset>
+
+<div class="action">
+<button class="primary" id="protect" disabled>Protect →</button>
+</div>
+</section>
+<section class="stage" id="s3" hidden>
+<div class="stage-head">
+<span class="number">03</span>
+<div>
+<div class="eyebrow">Sender / Actual output</div>
+<h2>Protection result</h2>
+</div>
+</div>
+<div class="notice" id="protection-status">
+</div>
+<button class="secondary" id="view-analysis">Original vs stego &rarr; Stego analysis</button>
+<div class="evidence">
+<div class="evidence-head">
+<h3>Embedding summary</h3>
+<span class="source">Measured output</span>
+</div>
+<div class="evidence-body">
+<dl>
+<div>
+<dt>Method / start index</dt>
+<dd id="run-config">
+</dd>
+</div>
+<div>
+<dt>Embedded / available</dt>
+<dd id="stored-count">
+</dd>
+</div>
+<div>
+<dt>Payload size</dt>
+<dd id="message-size-summary">
+</dd>
+</div>
+</dl>
+</div>
+</div>
+<details class="evidence">
+<summary style="padding:15px">Inspect technical evidence</summary>
+<div class="evidence-body">
+<h3>LSB replacement / actual values</h3>
+<p class="muted">Highlighted bits carry data. Matching bits need no change.</p>
+<pre id="regions" class="hash">
+</pre>
+<div class="scroll-table">
+<table>
+<thead>
+<tr>
+<th>Region / index</th>
+<th>Depth</th>
+<th>Before</th>
+<th>After</th>
+</tr>
+</thead>
+<tbody id="bit-rows">
+</tbody>
+</table>
+</div>
+<details>
+<summary>Signed verification record</summary>
+<pre id="signed-json" class="hash">
+</pre>
+<small>The receiver checks the RSA signature before parsing this record.</small>
+</details>
+</div>
+</details>
+<div class="action">
+<small id="output-name">
+</small>
+<button class="primary" id="to-transfer">Transfer &rarr;</button>
+</div>
+</section>
+<section class="stage" id="s4" hidden>
+<div class="stage-head">
+<span class="number">04</span>
+<div>
+<div class="eyebrow">Session</div>
+<h2>Transfer</h2>
+</div>
+</div>
+<div class="handoff">
+<div>
+<strong>Party A</strong>
+<small>Sender</small>
+</div>
+<span class="arrow">→</span>
+<div>
+<strong id="transfer-name">stego.png</strong>
+<small>Saved stego file</small>
+</div>
+<span class="arrow">→</span>
+<div>
+<strong>Party B</strong>
+<small>Receiver</small>
+</div>
+</div>
+<details>
+<summary>External transfer</summary>
+<p>Separate Party A-to-B email demonstration required.</p>
+<a class="secondary" id="download" download>Download stego file</a>
+</details>
+<div class="action">
+<button class="primary" id="to-receive">Receive →</button>
+</div>
+</section>
+<section class="stage" id="s5" hidden>
+<div class="stage-head">
+<span class="number">05</span>
+<div>
+<div class="eyebrow">Party B / Receiver</div>
+<h2>Receiver</h2>
+</div>
+</div>
+<div class="fields">
+<label class="field">Receiver passphrase<input id="receiver-pass" type="password" autocomplete="off" placeholder="Re-enter passphrase">
+</label>
+<label class="field">Public key<select id="public-key">
+<option value="demo">demo_public.pem</option>
+<option value="other">other_public.pem</option>
+</select>
+</label>
+</div>
+<label class="field" id="receiver-offset-label" hidden>Start position override (whole number)<input id="receiver-offset" type="number" inputmode="numeric" min="0" step="1" placeholder="Same carrier index as sender">
+</label>
+<label class="field">File to verify<select id="scenario">
+<option value="intact">Unchanged protected cover</option>
+<option value="tampered">Copy with an unmasked bit flipped</option>
+<option value="original">Original cover / payload missing</option>
+</select>
+</label>
+<p class="muted" style="font-size:12px">Tampering edits a copy; the protected original is preserved.</p>
+<p id="receive-error" class="error" role="alert">
+</p>
+<div class="action">
+<button class="primary" id="verify">Verify →</button>
+</div>
+</section>
+<section class="stage" id="s6" hidden aria-live="polite">
+<div class="stage-head">
+<span class="number">06</span>
+<div>
+<div class="eyebrow">Verdict / Actual result</div>
+<h2>Verification result</h2>
+</div>
+</div>
+<div id="verdict" class="verdict">
+</div>
+<div class="evidence">
+<div class="evidence-head">
+<h3>Verification attempts</h3>
+<span class="source pending">Backend results</span>
+</div>
+<div class="evidence-body scroll-table">
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Changed input</th>
+<th>First failed check</th>
+<th>Verdict</th>
+</tr>
+</thead>
+<tbody id="attempts">
+</tbody>
+</table>
+</div>
+</div>
+<h3>Checks</h3>
+<ol class="trail" id="verify-trail">
+</ol>
+<div id="recovered">
+<h3>Payload preview</h3>
+<p class="muted" style="font-size:12px">Extracted from the received stego file.</p>
+<div id="payload-preview" class="payload">
+</div>
+</div>
+<details id="record">
+<summary>Verified record / key fingerprint</summary>
+<pre id="record-json">
+</pre>
+</details>
+<div class="action">
+<button class="secondary" id="retry">Verify again</button>
+<button class="primary" id="restart">Start new demonstration →</button>
+</div>
+</section>
+</div>
+<aside class="side">
+<div class="side-box">
+<div class="eyebrow">Session</div>
+<h3 style="margin-top:12px">Current configuration</h3>
+<div class="summary-row">
+<span>Cover</span>
+<strong id="sum-cover">Medium image</strong>
+</div>
+<div class="summary-row">
+<span>Payload</span>
+<strong id="sum-payload">Text</strong>
+</div>
+<div class="summary-row">
+<span>Depth</span>
+<strong id="sum-depth">2 LSB</strong>
+</div>
+<div class="summary-row">
+<span>File transfer</span>
+<strong>Same saved file</strong>
+</div>
+<button class="restart" id="reset-top">Start new demonstration</button>
+</div>
+</aside>
+</div>
+</div>
+<section id="analysis-panel" role="tabpanel" aria-labelledby="analysis-tab" hidden>
+<div class="analysis-heading"><div><h2>Original vs stego</h2><small>Completed demonstrations remain here after refresh in this browser tab. Images open at full resolution; audio plays the saved files.</small></div><div class="analysis-actions"><button class="secondary" id="clear-history" title="Clear comparisons from this browser tab; saved files are retained">Clear analysis history</button><button class="secondary" id="back-demo">Back to demo &rarr;</button></div></div>
+<p class="muted analysis-note">Distortion depends on LSB depth, payload size and cover size. A higher depth does not guarantee a noticeable difference.</p>
+<p id="history-warning" class="error" role="status"></p>
+<p id="analysis-empty" class="notice">Protect a payload to add the first run.</p>
+<div id="analysis-runs"></div>
+</section>
+<p class="footer-note">Image and audio steganography / generated files retained in the workspace.</p>
+</main>
+<script src="{{ url_for('static', filename='walkthrough.js', v='wizard5') }}" defer>
+</script>
+</body>
+</html>

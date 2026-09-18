@@ -3,6 +3,7 @@ workflow itself lives in workflow.py."""
 
 import hashlib
 import json
+import shutil
 import uuid
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from flask import Flask, abort, jsonify, render_template, request, send_from_dir
 from werkzeug.utils import secure_filename
 
 import attacks
+import make_demo_files
 import security
 import workflow
 
@@ -107,6 +109,12 @@ def public_key_from_form():
 
 
 @app.get("/")
+@app.get("/walkthrough")
+def walkthrough_page():
+    return render_template("walkthrough.html")
+
+
+@app.get("/protect")
 def protect_page():
     return render_template("protect.html")
 
@@ -328,7 +336,194 @@ def attack():
 
 @app.errorhandler(413)
 def too_large(_):
+    if request.path.startswith("/api/"):
+        return jsonify(error="that request is larger than the 32 MB limit"), 413
     return render_template("protect.html", error="that file is larger than the 32 MB limit"), 413
+
+
+def walkthrough_samples():
+    directory = ROOT / "testFiles" / "original"
+    make_demo_files.make_walkthrough_samples(directory)
+    return {
+        name: (directory / name, label, kind)
+        for name, label, kind, _size in make_demo_files.WALKTHROUGH_SAMPLES
+    }
+
+
+def walkthrough_cover():
+    upload = request.files.get("file")
+    if upload and upload.filename:
+        return store_upload("file")[1]
+    samples = walkthrough_samples()
+    name = request.form.get("sample", "")
+    if name not in samples:
+        raise InputError("choose a cover first")
+    source = samples[name][0]
+    target = WORKSPACE / f"{uuid.uuid4().hex}{source.suffix}"
+    shutil.copyfile(source, target)
+    return target
+
+
+@app.before_request
+def check_walkthrough_origin():
+    # Reject cross-origin browser submissions to the state-changing demo API.
+    if request.path.startswith("/api/") and request.method == "POST":
+        origin = request.headers.get("Origin")
+        if origin and origin != request.host_url.rstrip("/"):
+            abort(403)
+
+
+@app.get("/api/options")
+def walkthrough_options():
+    samples = [
+        {"name": name, "label": label, "kind": kind, "default": label == "Medium",
+         "description": workflow.load_media(path).describe()}
+        for name, (path, label, kind) in walkthrough_samples().items()
+    ]
+    return jsonify(samples=samples, keys=available_public_keys())
+
+
+@app.get("/sample/<name>")
+def walkthrough_sample(name):
+    samples = walkthrough_samples()
+    if name not in samples:
+        abort(404)
+    return send_from_directory(samples[name][0].parent, name)
+
+
+@app.post("/api/capacity")
+def walkthrough_capacity():
+    cover = None
+    try:
+        offset = chosen_offset()
+        has_key = bool(request.form.get("key", "").strip())
+        key = derivation_key() if has_key else b""
+        upper_bound = not has_key and offset is None
+        if upper_bound:
+            offset = 0  # Maximum capacity, not a derived start position.
+        cover = walkthrough_cover()
+        media_object = workflow.load_media(cover)
+        report = workflow.capacity_report(media_object, key, offset)
+        report["upper_bound"] = upper_bound
+        if "payload_size" in request.form:
+            size = int(request.form["payload_size"])
+            depth = int(request.form.get("lsb_n", 2))
+            if size < 0 or not 1 <= depth <= 8:
+                raise ValueError("invalid payload size or LSB depth")
+            encrypted = request.form.get("encrypt") == "on" and size > 0
+            stored_size = size + (report["encryption_overhead"] if encrypted else 0)
+            name = secure_filename(request.form.get("payload_name", "message.txt"))
+            # Only lengths are needed: hashes, nonce and IDs have fixed lengths.
+            # Use the same record serializer and unit rounding as protection.
+            record = security.build_payload(media_object.media_type, "0" * 64,
+                                            depth, b"", name, encrypted)
+            record["msg_len"] = stored_size
+            record_size = len(security.canonical_json(record))
+            signature_size = security.load_private_key(DEFAULT_PRIVATE_KEY).key_size // 8
+            needed = workflow.units_required(depth, record_size, signature_size, stored_size)
+            report.update(stored_bytes=stored_size,
+                          required_bytes=record_size + signature_size + stored_size,
+                          fits=report["offset"] + needed <= report["units"])
+        return jsonify(description=media_object.describe(), **report)
+    except (InputError, workflow.UnsupportedMedia, OSError, ValueError) as exc:
+        return jsonify(error=str(exc)), 400
+    finally:
+        if cover is not None:
+            cover.unlink(missing_ok=True)
+
+
+@app.post("/api/protect")
+def walkthrough_protect():
+    cover = output = None
+    try:
+        key, offset = derivation_key(), chosen_offset()
+        depth = int(request.form.get("lsb_n", 2))
+        message, name = message_from_form()
+        cover = walkthrough_cover()
+        kind = workflow.media_kind(cover)
+        run_id = uuid.uuid4().hex
+        output = WORKSPACE / f"{run_id}_stego{workflow.STEGO_SUFFIX[kind]}"
+        report = workflow.protect(
+            cover, output, message, name, key, depth,
+            security.load_private_key(DEFAULT_PRIVATE_KEY),
+            encrypt=request.form.get("encrypt") == "on", offset=offset,
+        )
+        evidence = workflow.protection_evidence(cover, report)
+        # Retain only filenames and depth, never the passphrase or private key.
+        (WORKSPACE / f"{run_id}_run.json").write_text(json.dumps({
+            "cover": cover.name, "output": output.name, "depth": depth,
+        }), encoding="utf-8")
+        return jsonify(
+            id=run_id, kind=kind, cover=url_for("media", filename=cover.name),
+            output=url_for("media", filename=output.name), **evidence,
+        )
+    except (InputError, workflow.CapacityError, workflow.UnsupportedMedia, OSError, ValueError) as exc:
+        for path in (cover, output):
+            if path is not None:
+                path.unlink(missing_ok=True)
+        return jsonify(error=str(exc)), 400
+
+
+def walkthrough_run():
+    run_id = request.form.get("id", "")
+    if len(run_id) != 32 or any(c not in "0123456789abcdef" for c in run_id):
+        raise InputError("protect a cover first; invalid run identifier")
+    manifest = WORKSPACE / f"{run_id}_run.json"
+    if not manifest.is_file():
+        raise InputError("that protected file is no longer available")
+    run = json.loads(manifest.read_text(encoding="utf-8"))
+    for field in ("cover", "output"):
+        name = run.get(field, "")
+        if not name or secure_filename(name) != name:
+            raise InputError("invalid stored filename")
+        path = (WORKSPACE / name).resolve()
+        if path.parent != WORKSPACE.resolve() or not path.is_file():
+            raise InputError("stored file is missing or outside the workspace")
+        run[field] = path
+    return run
+
+
+@app.post("/api/verify")
+def walkthrough_verify():
+    tampered = None
+    try:
+        run = walkthrough_run()
+        key, offset = derivation_key(), chosen_offset()
+        selected_key = request.form.get("public_key_name", DEFAULT_PUBLIC_KEY.name)
+        if selected_key not in available_public_keys():
+            raise InputError("choose an available public key")
+        public_key = security.load_public_key(ROOT / "keys" / selected_key)
+        fingerprint = hashlib.sha256((ROOT / "keys" / selected_key).read_bytes()).hexdigest()
+        scenario = request.form.get("scenario", "intact")
+        path = run["output"]
+        if scenario == "original":
+            path = run["cover"]
+        elif scenario == "tampered":
+            tampered = WORKSPACE / f"{uuid.uuid4().hex}_tampered{path.suffix}"
+            attacks.save_bit_flipped_copy(path, tampered, run["depth"])
+            path = tampered
+        elif scenario != "intact":
+            raise InputError("choose a supported test scenario")
+        result = workflow.verify(path, key, public_key, offset)
+        response = {
+            "verdict": result.verdict, "explanation": result.explanation,
+            "checks": result.checks, "record": result.payload, "key": selected_key,
+            "public_fingerprint": fingerprint, "message_bytes": len(result.message),
+            "payload_url": None, "payload_type": None, "message_text": None,
+        }
+        if result.verdict == workflow.AUTHENTIC and result.message:
+            presented = present_message(result)
+            _kind, mimetype = sniff_payload(result.message)
+            response.update(
+                payload_url=presented["message_url"], payload_type=mimetype,
+                message_text=presented.get("message_text"),
+            )
+        return jsonify(response)
+    except (InputError, workflow.UnsupportedMedia, OSError, ValueError, KeyError, TypeError) as exc:
+        return jsonify(error=str(exc)), 400
+    finally:
+        if tampered is not None:
+            tampered.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

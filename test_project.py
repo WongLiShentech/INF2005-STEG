@@ -1237,3 +1237,146 @@ def test_attack_page_runs_every_attack(client, tmp_path):
     assert "8 of 8 attacks produced" in results
     for attack in attacks.ATTACKS:
         assert attack.label in results
+
+
+@pytest.fixture
+def walkthrough_client(tmp_path, monkeypatch):
+    monkeypatch.setattr(application, "WORKSPACE", tmp_path)
+    application.app.config.update(TESTING=True)
+    return application.app.test_client()
+
+
+@pytest.mark.parametrize("sample", [
+    "image_small.png", "image_medium.png", "image_large.png",
+    "audio_short.wav", "audio_medium.wav", "audio_long.wav",
+])
+def test_walkthrough_sample_round_trip(walkthrough_client, sample):
+    web = walkthrough_client
+    protected = web.post("/api/protect", data={
+        "sample": sample, "key": "walkthrough key", "message": "live message",
+        "lsb_n": "2", "encrypt": "on",
+    })
+    assert protected.status_code == 200, protected.get_data(as_text=True)
+    report = protected.get_json()
+    assert report["stored_bytes"] == len(b"live message") + 28
+    assert report["used_bytes"] <= report["capacity"]
+    assert report["changed"] > 0
+    assert 0 < report["max_change"] <= 3
+    assert report["psnr"] > 0
+    assert web.get(report["output"]).status_code == 200
+    result = web.post("/api/verify", data={
+        "id": report["id"], "key": "walkthrough key",
+        "public_key_name": "demo_public.pem",
+    }).get_json()
+    assert result["verdict"] == workflow.AUTHENTIC
+    assert result["message_text"] == "live message"
+    assert web.get(result["payload_url"]).data == b"live message"
+    assert any(check["label"] == "Decryption" for check in result["checks"])
+    manifest = application.WORKSPACE / f"{report['id']}_run.json"
+    assert "walkthrough key" not in manifest.read_text()
+
+
+def test_walkthrough_negative_cases_preserve_protected_file(walkthrough_client):
+    web = walkthrough_client
+    report = web.post("/api/protect", data={
+        "sample": "image_medium.png", "key": "correct", "message": "secret",
+        "lsb_n": "2", "encrypt": "on", "offset": "1001",
+    }).get_json()
+    original = web.get(report["output"]).data
+    cases = [
+        ("intact", "other_public.pem", "correct", "1001", workflow.SIGNATURE_INVALID),
+        ("tampered", "demo_public.pem", "correct", "1001", workflow.TAMPERED),
+        ("original", "demo_public.pem", "correct", "1001", workflow.PAYLOAD_MISSING),
+        ("intact", "demo_public.pem", "wrong", "1001", workflow.CANNOT_VERIFY),
+        ("intact", "demo_public.pem", "correct", "1002", workflow.WRONG_START_LOCATION),
+    ]
+    for scenario, keyname, passphrase, offset, expected in cases:
+        result = web.post("/api/verify", data={
+            "id": report["id"], "key": passphrase, "offset": offset,
+            "public_key_name": keyname, "scenario": scenario,
+        }).get_json()
+        assert result["verdict"] == expected
+        assert result["payload_url"] is None
+        assert web.get(report["output"]).data == original
+    assert not list(application.WORKSPACE.glob("*_tampered*"))
+
+
+def test_walkthrough_plaintext_file_and_metadata(walkthrough_client, cover):
+    web = walkthrough_client
+    report = web.post("/api/protect", data={
+        "file": (io.BytesIO(cover.read_bytes()), "cover.png"),
+        "message_file": (io.BytesIO(b"file message"), "message.txt"),
+        "key": "k", "offset": "0", "lsb_n": "3",
+    }).get_json()
+    assert not report["encrypted"]
+    assert report["stored_bytes"] == len(b"file message")
+    assert report["regions"]["header"] == [0, 103]
+    saved = workflow.load_media(application.WORKSPACE / report["output"].split("/")[-1])
+    before = workflow.load_media(cover)
+    for row in report["rows"]:
+        assert row["before"] == int(before.carrier[row["index"]])
+        assert row["after"] == int(saved.carrier[row["index"]])
+    result = web.post("/api/verify", data={
+        "id": report["id"], "key": "k", "offset": "0",
+        "public_key_name": "demo_public.pem",
+    }).get_json()
+    assert result["message_text"] == "file message"
+    assert "Decryption" not in [check["label"] for check in result["checks"]]
+
+
+def test_walkthrough_rejects_paths_and_bad_requests(walkthrough_client):
+    web = walkthrough_client
+    assert web.post("/api/verify", data={"id": "../keys/demo_private.pem"}).status_code == 400
+    assert web.post("/api/protect", data={
+        "sample": "../keys/demo_private.pem", "key": "k", "message": "hi",
+    }).status_code == 400
+    assert web.post("/api/protect", data={
+        "sample": "image_small.png", "key": "k", "message": "x" * 20000, "lsb_n": "1",
+    }).status_code == 400
+    assert not list(application.WORKSPACE.iterdir())
+    assert web.post("/api/capacity", headers={"Origin": "https://untrusted.example"}).status_code == 403
+    report = web.post("/api/protect", data={
+        "sample": "image_small.png", "key": "k", "message": "hi",
+    }).get_json()
+    for extra in [
+        {"public_key_name": "../demo_public.pem"}, {"scenario": "invented"},
+    ]:
+        response = web.post("/api/verify", data={"id": report["id"], "key": "k", **extra})
+        assert response.status_code == 400
+    manifest = application.WORKSPACE / f"{report['id']}_run.json"
+    import json
+    manifest.write_text(json.dumps({"cover": "../outside.png", "output": "valid.png", "depth": 2}))
+    assert web.post("/api/verify", data={"id": report["id"], "key": "k"}).status_code == 400
+
+
+def test_walkthrough_sample_options_and_capacity(walkthrough_client):
+    web = walkthrough_client
+    options = web.get("/api/options").get_json()
+    assert len(options["samples"]) == 6
+    assert sum(sample["default"] for sample in options["samples"]) == 2
+    capacities = {}
+    for sample in options["samples"]:
+        assert web.get("/sample/" + sample["name"]).status_code == 200
+        result = web.post("/api/capacity", data={
+            "sample": sample["name"], "key": "k", "offset": "0",
+        }).get_json()
+        capacities[sample["name"]] = result["capacity"]["2"]
+    assert capacities["image_small.png"] < capacities["image_medium.png"] < capacities["image_large.png"]
+    assert capacities["audio_short.wav"] < capacities["audio_medium.wav"] < capacities["audio_long.wav"]
+    assert not list(application.WORKSPACE.iterdir())
+
+
+def test_walkthrough_home_and_original_pages(walkthrough_client):
+    web = walkthrough_client
+    assert b"walkthrough.js" in web.get("/").data
+    assert b"walkthrough.js" in web.get("/walkthrough").data
+    for route in ("/protect", "/verify", "/attack", "/static/walkthrough.css", "/static/walkthrough.js"):
+        assert web.get(route).status_code == 200
+    limit = application.app.config["MAX_CONTENT_LENGTH"]
+    try:
+        application.app.config["MAX_CONTENT_LENGTH"] = 16
+        result = web.post("/api/protect", data={"message": "x" * 100})
+        assert result.status_code == 413
+        assert result.is_json
+    finally:
+        application.app.config["MAX_CONTENT_LENGTH"] = limit

@@ -86,6 +86,15 @@ def _flip_high_bit(carrier, index):
 # --- file attacks: each mutates a copy and returns a note for the report ---
 
 
+def save_bit_flipped_copy(source, destination, depth):
+    """Flip one unmasked bit for the walkthrough, preserving the source file."""
+    media = workflow.load_media(source)
+    if not 1 <= depth < media.carrier.dtype.itemsize * 8:
+        raise ValueError("no unmasked bits remain; choose a lower depth for this test")
+    media.carrier[0] ^= media.carrier.dtype.type(1 << depth)
+    media.save(destination)
+
+
 def edit_media(layout, _key, _extra):
     """Retouch the picture or the sound the way an editor would, leaving the
     hidden payload untouched. The signature stays valid; only the media hash

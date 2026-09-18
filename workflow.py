@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -212,6 +213,58 @@ def protect(
         encrypted=encrypted,
         plaintext_len=plaintext_len,
     )
+
+
+def protection_evidence(cover_path, report):
+    """Measure saved output for the GUI without changing the protection flow."""
+    original = load_media(cover_path)
+    before = original.carrier
+    after = load_media(report.output_path).carrier
+    depth = report.lsb_n
+    header = su.parse_header(su.extract(after, report.offset, su.HEADER_SIZE, 1))
+    body_at, message_at = regions(
+        report.offset, depth, header["payload_len"], header["sig_len"]
+    )
+    used = units_required(
+        depth, header["payload_len"], header["sig_len"], report.payload["msg_len"]
+    )
+    peak = 255
+    if media_kind(cover_path) == "audio" and before.dtype.itemsize > 1:
+        # PCM amplitudes are signed even though embedding uses unsigned bit patterns.
+        dtype = np.dtype(f"<i{before.dtype.itemsize}")
+        delta = after.view(dtype).astype(np.float64) - before.view(dtype).astype(np.float64)
+        peak = (1 << (before.dtype.itemsize * 8 - 1)) - 1
+    else:
+        delta = after.astype(np.float64) - before.astype(np.float64)
+    mse = float(np.mean(delta ** 2))
+    changed = int(np.count_nonzero(before != after))
+    rows = []
+    for label, start, end, bits in (
+        ("Header", report.offset, body_at, 1),
+        ("Message", message_at, report.offset + used, depth),
+    ):
+        for index in range(start, min(start + 4, end)):
+            rows.append({
+                "region": label, "index": index, "depth": bits,
+                "width": before.dtype.itemsize * 8,
+                "before": int(before[index]), "after": int(after[index]),
+            })
+    return {
+        "description": original.describe(), "offset": report.offset, "depth": depth,
+        "used_bytes": report.bytes_used, "capacity": report.capacity,
+        "input_bytes": report.plaintext_len, "stored_bytes": report.payload["msg_len"],
+        "encrypted": bool(report.encrypted), "record": report.payload,
+        "record_json": security.canonical_json(report.payload).decode(),
+        "changed": changed, "changed_percent": 100 * changed / len(before),
+        "max_change": float(np.max(np.abs(delta))),
+        "psnr": round(10 * math.log10(peak * peak / mse), 2) if mse else None,
+        "rows": rows,
+        "regions": {
+            "header": [report.offset, body_at - 1],
+            "record_signature": [body_at, message_at - 1],
+            "message": [message_at, report.offset + used - 1],
+        },
+    }
 
 
 def verify(path, derivation_key, public_key, offset=None):
