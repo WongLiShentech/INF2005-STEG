@@ -8,13 +8,13 @@
 
   <section class="card">
     <h2>1. File to check &mdash; the one you received</h2>
-    <input type="file" name="file" accept=".png,.bmp,.jpg,.jpeg,.wav" required>
-    <p class="hint">Usually a protected file someone sent you, image or sound. Try an unprotected one too, to see it report Payload Missing.</p>
+    <input type="file" name="file" accept=".png,.bmp,.jpg,.jpeg,.wav,.avi,.mp4,.mov,.mkv" required>
+    <p class="hint">Usually a protected file someone sent you, image, sound or video. Try an unprotected one too, to see it report Payload Missing.</p>
   </section>
 
   <section class="card">
     <h2>2. Original cover object &mdash; optional, for comparison</h2>
-    <input type="file" name="original" accept=".png,.bmp,.jpg,.jpeg,.wav">
+    <input type="file" name="original" accept=".png,.bmp,.jpg,.jpeg,.wav,.avi,.mp4,.mov,.mkv">
     <p class="hint">If you still have the file as it was before protection, add it here and the two will be shown side by side. The verdict does not depend on it: verification works from the received file alone, which is the point &mdash; the person checking a file usually does not have the original.</p>
   </section>
 
@@ -86,12 +86,14 @@
     {% if cover_url %}
     <figure>
       {% if cover_kind == 'audio' %}<audio controls src="{{ cover_url }}"></audio>
+      {% elif cover_kind == 'video' %}<video controls src="{{ cover_url }}"></video>
       {% else %}<img src="{{ cover_url }}" alt="the original cover object">{% endif %}
       <figcaption>Original cover &mdash; before protection</figcaption>
     </figure>
     {% endif %}
     <figure>
       {% if kind == 'audio' %}<audio controls src="{{ stego_url }}"></audio>
+      {% elif kind == 'video' %}<video controls src="{{ stego_url }}"></video>
       {% else %}<img src="{{ stego_url }}" alt="the file being verified">{% endif %}
       <figcaption>The file as received</figcaption>
     </figure>
@@ -121,6 +123,11 @@
   {% elif message_kind == 'audio' %}
   <div class="compare"><figure>
     <audio controls src="{{ message_url }}"></audio>
+    <figcaption>The payload, played from the bytes recovered out of the cover object</figcaption>
+  </figure></div>
+  {% elif message_kind == 'video' %}
+  <div class="compare"><figure>
+    <video controls src="{{ message_url }}"></video>
     <figcaption>The payload, played from the bytes recovered out of the cover object</figcaption>
   </figure></div>
   {% else %}

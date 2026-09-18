@@ -16,6 +16,7 @@ import audio_helpers
 import image_helpers
 import security
 import stego_utils as su
+import video_helpers
 import workflow
 
 KEY = b"demo derivation key"
@@ -560,6 +561,164 @@ def test_image_and_audio_share_one_codec(wav, cover, tmp_path, signer):
         result = workflow.verify(path, KEY, signer.public_key())
         assert result.verdict == workflow.AUTHENTIC
         assert result.message == b"same message"
+
+
+# --- video codec ---
+
+
+def write_video(path, n_frames=8, width=32, height=24, fps=10, seed=21):
+    rng = np.random.default_rng(seed=seed)
+    frames = rng.integers(0, 256, size=(n_frames, height, width, 3), dtype=np.uint8)
+    video_helpers.VideoCarrier(frames, fps).save(path)
+    return path
+
+
+@pytest.fixture
+def video(tmp_path):
+    return write_video(tmp_path / "cover.avi")
+
+
+def protect_video(video, tmp_path, signer, message=b"a hidden message", lsb_n=2, **kwargs):
+    out = tmp_path / "stego.avi"
+    report = workflow.protect(video, out, message, "note.txt", KEY, lsb_n, signer, **kwargs)
+    return out, report
+
+
+def test_video_frame_stack_round_trips_through_save_and_load(tmp_path):
+    """The FFV1 writer must be bit-exact, or embedded bits would not survive
+    a save; confirmed once here rather than trusted, per the spike that
+    picked FFV1 over HuffYUV, MJPEG and raw AVI in the first place."""
+    rng = np.random.default_rng(seed=5)
+    frames = rng.integers(0, 256, size=(6, 20, 30, 3), dtype=np.uint8)
+    path = tmp_path / "round_trip.avi"
+    video_helpers.VideoCarrier(frames, 15).save(path)
+
+    reloaded = video_helpers.load(path)
+    assert np.array_equal(reloaded.frames, frames)
+
+
+@pytest.mark.parametrize("lsb_n", range(1, 9))
+def test_protected_video_verifies_at_every_depth(video, tmp_path, signer, lsb_n):
+    out, _ = protect_video(video, tmp_path, signer, lsb_n=lsb_n)
+
+    result = workflow.verify(out, KEY, signer.public_key())
+    assert result.verdict == workflow.AUTHENTIC
+    assert result.message == b"a hidden message"
+
+
+def test_video_embedding_only_touches_the_low_bits(video, tmp_path, signer):
+    out, _ = protect_video(video, tmp_path, signer, lsb_n=2)
+
+    before = video_helpers.load(video).carrier
+    after = video_helpers.load(out).carrier
+    assert np.array_equal(before >> np.uint8(2), after >> np.uint8(2))
+
+
+def test_video_edit_outside_the_payload_region_is_tampered(video, tmp_path, signer):
+    out, _ = protect_video(video, tmp_path, signer)
+
+    media = video_helpers.load(out)
+    media.carrier[-1] ^= np.uint8(0b1000_0000)
+    media.save(out)
+
+    assert workflow.verify(out, KEY, signer.public_key()).verdict == workflow.TAMPERED
+
+
+def test_video_edit_inside_the_payload_region_is_signature_invalid(video, tmp_path, signer):
+    out, report = protect_video(video, tmp_path, signer)
+
+    media = video_helpers.load(out)
+    media.carrier[report.offset + su.HEADER_UNITS + 5] ^= np.uint8(0b0000_0011)
+    media.save(out)
+
+    assert workflow.verify(out, KEY, signer.public_key()).verdict == workflow.SIGNATURE_INVALID
+
+
+def test_video_wrong_public_key_is_signature_invalid(video, tmp_path, signer):
+    out, _ = protect_video(video, tmp_path, signer)
+    stranger = security.generate_keypair()
+
+    assert workflow.verify(out, KEY, stranger.public_key()).verdict == workflow.SIGNATURE_INVALID
+
+
+def test_video_wrong_derivation_key_is_wrong_start_location(video, tmp_path, signer):
+    out, _ = protect_video(video, tmp_path, signer)
+
+    result = workflow.verify(out, b"not the key", signer.public_key())
+    assert result.verdict == workflow.WRONG_START_LOCATION
+
+
+def test_unprotected_video_is_payload_missing(video, signer):
+    assert workflow.verify(video, KEY, signer.public_key()).verdict == workflow.PAYLOAD_MISSING
+
+
+def test_oversized_video_payload_is_blocked_before_embedding(tmp_path, signer):
+    small = write_video(tmp_path / "small.avi", n_frames=2, width=8, height=8)
+    out = tmp_path / "stego.avi"
+
+    with pytest.raises(workflow.CapacityError):
+        workflow.protect(small, out, b"x" * 5000, "big.txt", KEY, 1, signer)
+
+    assert not out.exists()
+
+
+def test_video_seed_is_read_from_the_container_not_the_filename(video, tmp_path, signer):
+    """The transfer case renames the file; verification must survive that."""
+    out, _ = protect_video(video, tmp_path, signer)
+    renamed = tmp_path / "downloaded (1).avi"
+    renamed.write_bytes(out.read_bytes())
+
+    assert workflow.verify(renamed, KEY, signer.public_key()).verdict == workflow.AUTHENTIC
+
+
+def test_a_protected_video_file_must_be_written_as_avi(video, tmp_path, signer):
+    with pytest.raises(ValueError, match=".avi"):
+        workflow.protect(video, tmp_path / "stego.png", b"hi", "n.txt", KEY, 1, signer)
+
+
+def test_image_audio_and_video_share_one_codec(wav, cover, video, tmp_path, signer):
+    """All three kinds run the identical embed/verify path; only loading differs."""
+    image_out, _ = protect_to(cover, tmp_path, signer, message=b"same message")
+    audio_out, _ = protect_wav(wav, tmp_path, signer, message=b"same message")
+    video_out, _ = protect_video(video, tmp_path, signer, message=b"same message")
+
+    for path in (image_out, audio_out, video_out):
+        result = workflow.verify(path, KEY, signer.public_key())
+        assert result.verdict == workflow.AUTHENTIC
+        assert result.message == b"same message"
+
+
+def test_web_app_protects_and_verifies_video(client, tmp_path):
+    """A protected video must come back as .avi, not as the image default.
+
+    cv2.VideoWriter needs a real file path, unlike the wave module used for
+    audio, which can write straight into an in-memory buffer — so the source
+    clip is built on disk via tmp_path and read back into bytes.
+    """
+    web, _ = client
+    source = write_video(tmp_path / "cover.avi")
+    video_bytes = source.read_bytes()
+
+    page = post_multipart(
+        web,
+        "/protect",
+        {
+            "file": (io.BytesIO(video_bytes), "cover.avi"),
+            "key": "shared key",
+            "lsb_n": "2",
+            "message": "hidden inside a video file",
+        },
+    ).get_data(as_text=True)
+
+    stego_name = re.search(r"/media/([A-Za-z0-9_]+_stego\.avi)", page).group(1)
+    stego = web.get(f"/media/{stego_name}").get_data()
+
+    verdict_page = post_multipart(
+        web, "/verify", {"file": (io.BytesIO(stego), "stego.avi"), "key": "shared key"}
+    ).get_data(as_text=True)
+
+    assert workflow.AUTHENTIC in verdict_page
+    assert "hidden inside a video file" in verdict_page
 
 
 # --- key separation and message encryption ---
@@ -1249,6 +1408,7 @@ def walkthrough_client(tmp_path, monkeypatch):
 @pytest.mark.parametrize("sample", [
     "image_small.png", "image_medium.png", "image_large.png",
     "audio_short.wav", "audio_medium.wav", "audio_long.wav",
+    "video_short.avi", "video_medium.avi", "video_long.avi",
 ])
 def test_walkthrough_sample_round_trip(walkthrough_client, sample):
     web = walkthrough_client
@@ -1352,8 +1512,8 @@ def test_walkthrough_rejects_paths_and_bad_requests(walkthrough_client):
 def test_walkthrough_sample_options_and_capacity(walkthrough_client):
     web = walkthrough_client
     options = web.get("/api/options").get_json()
-    assert len(options["samples"]) == 6
-    assert sum(sample["default"] for sample in options["samples"]) == 2
+    assert len(options["samples"]) == 9
+    assert sum(sample["default"] for sample in options["samples"]) == 3
     capacities = {}
     for sample in options["samples"]:
         assert web.get("/sample/" + sample["name"]).status_code == 200
@@ -1363,6 +1523,7 @@ def test_walkthrough_sample_options_and_capacity(walkthrough_client):
         capacities[sample["name"]] = result["capacity"]["2"]
     assert capacities["image_small.png"] < capacities["image_medium.png"] < capacities["image_large.png"]
     assert capacities["audio_short.wav"] < capacities["audio_medium.wav"] < capacities["audio_long.wav"]
+    assert capacities["video_short.avi"] < capacities["video_medium.avi"] < capacities["video_long.avi"]
     assert not list(application.WORKSPACE.iterdir())
 
 

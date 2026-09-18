@@ -8,7 +8,7 @@
 
   <section class="card">
     <h2>1. A protected file to attack</h2>
-    <input type="file" name="file" accept=".png,.bmp,.jpg,.jpeg,.wav" required>
+    <input type="file" name="file" accept=".png,.bmp,.jpg,.jpeg,.wav,.avi,.mp4,.mov,.mkv" required>
     <p class="hint">Something already protected, for example testFiles/protected/P1_image_short_n2.png. The file you upload is never modified: each attack works on its own copy.</p>
   </section>
 
@@ -25,7 +25,7 @@
 
   <section class="card">
     <h2>4. A second cover object &mdash; optional</h2>
-    <input type="file" name="target" accept=".png,.bmp,.jpg,.jpeg,.wav">
+    <input type="file" name="target" accept=".png,.bmp,.jpg,.jpeg,.wav,.avi,.mp4,.mov,.mkv">
     <p class="hint">Needed only for the replay attack, which lifts a genuine signed payload out of the first file and drops it into this one. Without it that row is skipped. Use a different cover from the first, for example testFiles/original/cover.wav.</p>
   </section>
 

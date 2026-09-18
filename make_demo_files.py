@@ -19,6 +19,7 @@ from PIL import Image
 
 import attacks
 import security
+import video_helpers
 import workflow
 
 ROOT = Path(__file__).parent
@@ -63,6 +64,9 @@ WALKTHROUGH_SAMPLES = [
     ("audio_short.wav", "Short", "audio", 1),
     ("audio_medium.wav", "Medium", "audio", 6),
     ("audio_long.wav", "Long", "audio", 30),
+    ("video_short.avi", "Short", "video", 1),
+    ("video_medium.avi", "Medium", "video", 3),
+    ("video_long.avi", "Long", "video", 6),
 ]
 
 
@@ -74,6 +78,8 @@ def make_walkthrough_samples(directory=ORIGINAL):
             continue
         if kind == "image":
             make_cover_image(path, *size)
+        elif kind == "video":
+            make_cover_video(path, seconds=size)
         else:
             make_cover_audio(path, seconds=size)
 
@@ -119,6 +125,28 @@ def make_cover_audio(path, seconds=6, rate=44100, channels=2):
     return path
 
 
+def make_cover_video(path, seconds=3, width=320, height=240, fps=12):
+    """A short synthetic clip: a horizontally drifting gradient with
+    per-frame noise, so frames differ from each other the way real footage
+    would. Deliberately small: a raw frame array grows fast (width x height
+    x 3 bytes x frame count), and the lossless FFV1 writer stores every
+    frame in full, so testFiles/ stays a manageable size."""
+    rng = np.random.default_rng(seed=20260911)
+    n_frames = max(1, round(seconds * fps))
+    ys, xs = np.mgrid[0:height, 0:width]
+    frames = np.empty((n_frames, height, width, 3), dtype=np.uint8)
+    for i in range(n_frames):
+        shift = (i / n_frames) * width
+        red = 40 + 180 * (((xs + shift) % width) / width)
+        green = 60 + 150 * (ys / height)
+        blue = 200 - 120 * ((xs + ys) / (width + height))
+        pixel = np.stack([red, green, blue], axis=-1).astype(np.float64)
+        pixel += rng.normal(0, 6, size=pixel.shape)
+        frames[i] = np.clip(pixel, 0, 255).astype(np.uint8)
+    video_helpers.VideoCarrier(frames, fps).save(path)
+    return path
+
+
 def make_small_cover(path):
     """Deliberately too small to hold a large payload, for the capacity case."""
     rng = np.random.default_rng(seed=3)
@@ -158,10 +186,12 @@ def main():
 
     cover_png = make_cover_image(ORIGINAL / "cover.png")
     cover_wav = make_cover_audio(ORIGINAL / "cover.wav")
+    cover_avi = make_cover_video(ORIGINAL / "cover.avi")
     small_png = make_small_cover(ORIGINAL / "small_cover.png")
     make_walkthrough_samples()
     log(f"Cover image  {workflow.load_media(cover_png).describe()}")
     log(f"Cover audio  {workflow.load_media(cover_wav).describe()}")
+    log(f"Cover video  {workflow.load_media(cover_avi).describe()}")
     log(f"Small cover  {workflow.load_media(small_png).describe()}")
     log()
     log("=" * 72)
@@ -196,6 +226,14 @@ def main():
         cover_wav, p4, CUSTOM, "release-authorisation.txt", KEY, 2, private_key, encrypt=True
     )
     passed.append(report("P4  audio, custom encrypted payload, authentic", p4, verdict_of(p4), workflow.AUTHENTIC))
+
+    # P5 - video, short message, depth 2, plaintext. The optional cover
+    # object: same codec, same verdict tree, nothing video-specific needed
+    # beyond video_helpers.py loading/saving the frame stack.
+    p5 = PROTECTED / "P5_video_short_n2.avi"
+    r = workflow.protect(cover_avi, p5, SHORT, "learning-outcome.txt", KEY, 2, private_key)
+    log(f"P5 protect: offset {r.offset:,}, {r.bytes_used:,} of {r.capacity:,} bytes at 2 LSB")
+    passed.append(report("P5  video, short message, authentic", p5, verdict_of(p5), workflow.AUTHENTIC))
 
     log("=" * 72)
     log()
@@ -255,6 +293,13 @@ def main():
     n8 = TAMPERED / "N8_audio_replayed_payload.wav"
     Path(outcome.path).replace(n8)
     passed.append(report("N8  a genuine payload replayed into another cover", n8, verdict_of(n8), workflow.TAMPERED))
+
+    # N9 - the optional video cover object, edited outside the payload
+    # region. Same story as N1, on the third codec.
+    outcome = attacks.run(attacks.BY_KEY["edit_media"], p5, KEY, security.load_public_key(PUBLIC), TAMPERED)
+    n9 = TAMPERED / "N9_video_edited.avi"
+    Path(outcome.path).replace(n9)
+    passed.append(report("N9  video edited outside the payload region", n9, verdict_of(n9), workflow.TAMPERED))
 
     log("=" * 72)
     log("Attack simulation against P3 (encrypted image)")

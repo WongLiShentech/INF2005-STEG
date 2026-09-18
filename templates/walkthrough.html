@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>STEG / Demonstration studio</title>
-<link rel="stylesheet" href="{{ url_for('static', filename='walkthrough.css', v='wizard5') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='walkthrough.css', v='wizard7') }}">
 </head>
 <body>
 <header>
@@ -44,13 +44,13 @@
 <div class="tabs" id="media-tabs" role="group" aria-label="Cover type">
 <button data-kind="image" class="selected" aria-pressed="true">Image</button>
 <button data-kind="audio" aria-pressed="false">Audio</button>
-<button disabled title="Not supported by the current backend">Video / unavailable</button>
+<button data-kind="video" aria-pressed="false">Video</button>
 </div>
-<div id="video-note" class="notice warn" hidden>Video / concept only</div>
+<div id="video-note" class="notice warn" hidden>Video cover objects are written out as lossless AVI (FFV1); expect much larger files than the source.</div>
 <div class="cover-grid" id="covers">
 </div>
 <label class="upload">Local cover <span class="muted">/ local demo server</span>
-<input id="cover-file" type="file" accept=".png,.bmp,.jpg,.jpeg,.wav">
+<input id="cover-file" type="file" accept=".png,.bmp,.jpg,.jpeg,.wav,.avi,.mp4,.mov,.mkv">
 </label>
 <div id="local-preview">
 </div>
@@ -333,7 +333,7 @@
 </section>
 <p class="footer-note">Image and audio steganography / generated files retained in the workspace.</p>
 </main>
-<script src="{{ url_for('static', filename='walkthrough.js', v='wizard5') }}" defer>
+<script src="{{ url_for('static', filename='walkthrough.js', v='wizard7') }}" defer>
 </script>
 </body>
 </html>

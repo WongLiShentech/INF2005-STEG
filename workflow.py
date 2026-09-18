@@ -12,6 +12,7 @@ import audio_helpers
 import image_helpers
 import security
 import stego_utils as su
+import video_helpers
 
 AUTHENTIC = "Authentic"
 TAMPERED = "Tampered"
@@ -22,11 +23,12 @@ CANNOT_VERIFY = "Cannot Verify"
 
 IMAGE_SUFFIXES = {".png", ".bmp", ".jpg", ".jpeg"}
 AUDIO_SUFFIXES = {".wav"}
+VIDEO_SUFFIXES = video_helpers.READABLE_SUFFIXES
 
-# The suffix a protected file must be written with, per cover kind. Both are
-# lossless: writing a stego object to a lossy format would discard the very
-# bits the payload lives in.
-STEGO_SUFFIX = {"image": ".png", "audio": ".wav"}
+# The suffix a protected file must be written with, per cover kind. All three
+# are lossless: writing a stego object to a lossy format would discard the
+# very bits the payload lives in.
+STEGO_SUFFIX = {"image": ".png", "audio": ".wav", "video": ".avi"}
 
 # Hard ceiling on the fallback search, independent of file size.
 SCAN_UNIT_CAP = 2_000_000
@@ -83,20 +85,25 @@ def _short(digest):
 
 
 def media_kind(path):
-    """'image' or 'audio', decided by suffix. Raises for anything else."""
+    """'image', 'audio' or 'video', decided by suffix. Raises for anything else."""
     suffix = Path(path).suffix.lower()
     if suffix in IMAGE_SUFFIXES:
         return "image"
     if suffix in AUDIO_SUFFIXES:
         return "audio"
+    if suffix in VIDEO_SUFFIXES:
+        return "video"
     raise UnsupportedMedia(f"{suffix or 'that file'} is not a supported cover object")
 
 
 def load_media(path):
-    """Both kinds return an object exposing .carrier, .seed, .media_type,
+    """All three kinds return an object exposing .carrier, .seed, .media_type,
     .describe() and .save(). Nothing below this line knows or cares which."""
-    if media_kind(path) == "image":
+    kind = media_kind(path)
+    if kind == "image":
         return image_helpers.load(path)
+    if kind == "video":
+        return video_helpers.load(path)
     return audio_helpers.load(path)
 
 

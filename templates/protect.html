@@ -8,8 +8,8 @@
 
   <section class="card">
     <h2>1. Cover object &mdash; the file you hide things inside</h2>
-    <input type="file" name="file" id="cover-input" accept=".png,.bmp,.jpg,.jpeg,.wav" required>
-    <p class="hint" id="cover-describe">Pick a PNG or a WAV, for example testFiles/original/cover.png or testFiles/original/cover.wav. This is the container, not the secret. A protected image is always written as PNG and a protected sound as WAV, because lossy compression destroys the hidden bits.</p>
+    <input type="file" name="file" id="cover-input" accept=".png,.bmp,.jpg,.jpeg,.wav,.avi,.mp4,.mov,.mkv" required>
+    <p class="hint" id="cover-describe">Pick a PNG, a WAV or a video, for example testFiles/original/cover.png, testFiles/original/cover.wav or testFiles/original/cover.avi. This is the container, not the secret. A protected image is always written as PNG, a protected sound as WAV and a protected video as AVI (FFV1, lossless), because lossy compression destroys the hidden bits.</p>
   </section>
 
   <section class="card">
@@ -72,16 +72,19 @@
   <div class="compare">
     <figure>
       {% if kind == 'audio' %}<audio controls src="{{ cover_url }}"></audio>
+      {% elif kind == 'video' %}<video controls src="{{ cover_url }}"></video>
       {% else %}<img src="{{ cover_url }}" alt="cover object before encoding">{% endif %}
       <figcaption>Cover &mdash; before</figcaption>
     </figure>
     <figure>
       {% if kind == 'audio' %}<audio controls src="{{ stego_url }}"></audio>
+      {% elif kind == 'video' %}<video controls src="{{ stego_url }}"></video>
       {% else %}<img src="{{ stego_url }}" alt="stego object after encoding">{% endif %}
       <figcaption>Stego &mdash; after</figcaption>
     </figure>
   </div>
   {% if kind == 'audio' %}<p class="hint">Play both. At low depth the two are indistinguishable; raise the depth and the hiss in the second one is the payload becoming audible.</p>{% endif %}
+  {% if kind == 'video' %}<p class="hint">Play both. At low depth the two are indistinguishable; raise the depth and the payload becomes visible as noise in whichever frame(s) it landed in.</p>{% endif %}
 
   <p><a class="download" href="{{ stego_url }}" download>Download the stego file</a> &mdash; send this to the person who needs to verify it.</p>
 

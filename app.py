@@ -23,7 +23,7 @@ WORKSPACE = ROOT / "workspace"
 DEFAULT_PUBLIC_KEY = ROOT / "keys" / "demo_public.pem"
 DEFAULT_PRIVATE_KEY = ROOT / "keys" / "demo_private.pem"
 
-MEDIA_SUFFIXES = {".png", ".bmp", ".jpg", ".jpeg", ".wav"}
+MEDIA_SUFFIXES = {".png", ".bmp", ".jpg", ".jpeg", ".wav", ".avi", ".mp4", ".mov", ".mkv"}
 KEY_SUFFIXES = {".pem"}
 
 WORKSPACE.mkdir(exist_ok=True)
@@ -142,7 +142,7 @@ def payload(filename):
         abort(404)
 
     kind, mimetype = sniff_payload(path.read_bytes())
-    inline = kind in {"image", "audio", "text"}
+    inline = kind in {"image", "audio", "video", "text"}
     return send_from_directory(
         WORKSPACE,
         path.name,
@@ -276,6 +276,8 @@ def sniff_payload(data):
             return kind, mimetype
     if data[:4] == b"RIFF" and data[8:12] == b"WAVE":
         return "audio", "audio/wav"
+    if data[:4] == b"RIFF" and data[8:12] == b"AVI ":
+        return "video", "video/x-msvideo"
     try:
         data.decode("utf-8")
     except UnicodeDecodeError:

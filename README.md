@@ -41,6 +41,7 @@ app.py             Flask routes: upload, protect, verify, capacity, serve media
 workflow.py        protect() and verify() end to end, including the verdict tree
 image_helpers.py   PNG load/save, carrier array, capacity, seed string
 audio_helpers.py   WAV/PCM load/save, carrier array, capacity, seed string
+video_helpers.py   Lossless AVI (FFV1) load/save, carrier array, capacity, seed string
 security.py        Payload record, canonical JSON, media hash, RSA sign/verify
 stego_utils.py     Bit conversion, header, keyed offset, LSB embed/extract
 generate_key.py    One-off demo keypair script
@@ -53,10 +54,11 @@ evidence/          Screenshots and logs for each test case
 workspace/         Scratch space the running server writes to (not committed)
 ```
 
-Both media types are reduced to a flat array of integer carrier units — image
-channel values or audio samples — so the LSB replacement code in `stego_utils.py`
-is written once and shared. `image_helpers.py` and `audio_helpers.py` differ only
-in how they load and save that array.
+All three media types are reduced to a flat array of integer carrier units —
+image channel values, audio samples, or video frame pixels — so the LSB
+replacement code in `stego_utils.py` is written once and shared.
+`image_helpers.py`, `audio_helpers.py` and `video_helpers.py` differ only in
+how they load and save that array.
 
 ## Design decisions
 
@@ -279,6 +281,63 @@ the signature (`Signature Invalid`). Editing the media *outside* it, above the L
 planes, leaves the signature perfectly valid and is caught by the hash instead
 (`Tampered`). Different mechanisms, different verdicts.
 
+### 10. Video cover object (optional challenge)
+
+Video is not required by the spec, only permitted as an optional extension.
+The design goal was to add it without writing a second embedding path:
+`video_helpers.py` reads every frame of a clip into one `(frames, height,
+width, 3)` array and flattens it exactly the way `image_helpers.py` flattens
+a single frame's pixel grid. Once flattened, it is indistinguishable from an
+image carrier to everything downstream — `stego_utils.py`, `workflow.py` and
+`security.py` needed no changes at all.
+
+That has a direct consequence for start-location security (FR7). The keyed
+offset derivation was already confined to the first half of the carrier, for
+the same reason it is for images: a payload has to land *somewhere*, and
+which frame(s) it lands in falls straight out of where that offset happens
+to sit inside the flattened array. No separate "pick a frame" step was
+designed or is needed — the existing pixel-level derivation already secures
+a frame-level decision, because a video's carrier is only pixels with one
+more dimension folded in before the flatten.
+
+**Output is always lossless AVI, written with the FFV1 codec.** The same
+"we never write JPEG" rule `image_helpers.py` already enforces for images
+applies here: FFV1 was chosen over MJPEG, raw/uncompressed AVI and HuffYUV
+after a round-trip spike confirmed it is the only one of the four, among the
+codecs available through OpenCV's bundled FFmpeg backend on this machine,
+that returns bit-exact frames — MJPEG and raw AVI both altered pixel values
+on read-back, which would have silently corrupted the low bits the payload
+lives in. Input can be a wider set of containers (MP4, MOV, MKV) than we
+ever write, mirroring how an image cover can be uploaded as JPEG even though
+protected output is always PNG.
+
+**The masked media hash covers every frame**, not only the frame(s) the
+payload happened to land in — `security.masked_hash()` is called on the
+whole flattened carrier, unchanged from the image and audio paths. An edit
+to any frame, whether or not it carries payload bits, is caught by `Tampered`
+the same way an edit anywhere in an image or a waveform already is.
+
+**No browser reliably plays the protected file back.** FFV1-in-AVI is
+bit-exact, which is what verification needs, but it is not something any
+major browser's `<video>` element is guaranteed to decode — an attempt to
+switch the codec itself to lossless H.264 (CRF/QP 0, universally
+browser-playable) found that this OpenCV build has no H.264 encoder
+available at all. Every check, hash and verdict is still computed correctly
+against the real file regardless — this is a display limitation, not a
+correctness one — but seeing a video cover or stego object play in the
+interface itself cannot be relied on; download the file and open it in a
+dedicated player (VLC, ffplay) to actually watch it.
+
+Uncompressed frame data is large, stated openly rather than hidden: a short,
+modest-resolution demo clip (320×240, a few seconds) runs a few megabytes to
+a few tens of megabytes once written losslessly, and the whole clip is held
+in memory as one NumPy array during both protection and verification. This
+is the video equivalent of the existing PNG-not-JPEG and WAV-not-MP3
+trade-off, just more visible: a longer or higher-resolution source video
+needs proportionally more memory and produces a proportionally larger stego
+file. The walkthrough demo's video samples are kept deliberately short and
+small for this reason.
+
 ## Interface
 
 Three pages, one job each: **Protect** embeds and signs, **Verify** checks and
@@ -322,6 +381,16 @@ distribute only `demo_public.pem`.
   be plainly audible in speech with pauses.
 - 24-bit PCM is unsupported: its samples have no native integer width, so they
   cannot be addressed as whole carrier units without a bespoke packing step.
+- Protected video is written uncompressed (FFV1), so a stego file is
+  routinely several times the size of a normally-encoded source clip, and a
+  long or high-resolution clip loads the entire frame stack into memory at
+  once. Frame count is read by decoding to the end rather than trusted from
+  container metadata, because some containers misreport it.
+- No browser reliably plays the protected AVI/FFV1 file back in the
+  interface itself. Every check, hash and verdict is still computed
+  correctly against the real file — this is a display limitation, not a
+  correctness one — but a video cover or stego object should be downloaded
+  and opened in a dedicated player to actually watch it.
 - Encryption protects the message, not the record. The payload JSON — media ID,
   timestamp, team, issuer — is readable by anyone who finds the start location,
   because the verifier has to read it before deciding anything.
@@ -352,6 +421,8 @@ Rebuild all of these with `python make_demo_files.py`. The passphrase is
 | `tampered/N6_audio_payload_bits_flipped.wav` | Payload bytes altered |
 | `tampered/N7_not_an_image.png` | Not a media file, renamed |
 | `tampered/N8_audio_replayed_payload.wav` | Genuine payload replayed into another cover |
+| `protected/P5_video_short_n2.avi` | Video (optional cover object), short message, 2 LSB, plaintext |
+| `tampered/N9_video_edited.avi` | Video media edited outside the payload region |
 | `original/small_cover.png` | Too small to hold the large message |
 
 The remaining negative cases need no file of their own: `other_public.pem`
@@ -364,6 +435,9 @@ every one of them.
 ## Status
 
 Image and audio codecs, key separation, message encryption, the full verdict
-tree and the web interface are complete and covered by the test suite. Every
-sample in `testFiles/` is regenerated by `make_demo_files.py`, which also
-writes the run log in `evidence/`.
+tree and the web interface are complete and covered by the test suite. The
+optional video cover object (FR13/optional challenge) shares the same
+verdict tree, capacity math and start-location derivation unchanged, backed
+by a lossless (FFV1) AVI codec in `video_helpers.py`. Every sample in
+`testFiles/` is regenerated by `make_demo_files.py`, which also writes the
+run log in `evidence/`.
