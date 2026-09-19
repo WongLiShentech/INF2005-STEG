@@ -1618,3 +1618,162 @@ def test_walkthrough_home_and_original_pages(walkthrough_client):
         assert result.is_json
     finally:
         application.app.config["MAX_CONTENT_LENGTH"] = limit
+
+
+# --- steganalysis ---
+
+
+@pytest.fixture
+def measured(tmp_path, signer):
+    """A protected cover plus the measurements taken from it."""
+    import steganalysis
+
+    source = tmp_path / "cover.wav"
+    write_wav(source, frames=60000)
+    out = tmp_path / "stego.wav"
+    message = b"a payload large enough to occupy a visible share of the carrier " * 120
+    report = workflow.protect(source, out, message, "n.txt", KEY, 2, signer, encrypt=True)
+    used = workflow.units_required(
+        2, len(security.canonical_json(report.payload)), 256, report.payload["msg_len"]
+    )
+    data = steganalysis.analyse(
+        audio_helpers.load(source).carrier, audio_helpers.load(out).carrier,
+        "audio", 2, report.offset, used,
+    )
+    return data, report, used
+
+
+def test_analysis_reduces_every_series_to_a_drawable_size(measured):
+    """A chart cannot render half a million samples and a browser should not
+    be asked to hold them."""
+    import steganalysis
+
+    data, _report, _used = measured
+    for series in (data["waveform"]["cover"]["high"], data["waveform"]["cover"]["low"],
+                   data["difference"]["values"], data["lsb"]["cover"]["values"]):
+        assert len(series) == steganalysis.POINTS
+    assert len(data["chi"]["stego"]["values"]) == steganalysis.WINDOWS
+    assert data["units"] > steganalysis.POINTS * 50
+
+
+def test_waveform_is_drawn_from_signed_amplitudes(measured):
+    """Audio is signed on disk. Drawn as unsigned, silence would appear as a
+    full-scale block and the signal would be cut in half at zero."""
+    data, _report, _used = measured
+    low = data["waveform"]["cover"]["low"]
+
+    assert min(low) < 0                       # the waveform swings below zero
+    assert all(-1.01 <= v <= 1.01 for v in low + data["waveform"]["cover"]["high"])
+
+
+def test_difference_is_zero_outside_the_payload_and_nonzero_inside(measured):
+    """The point of the view: nothing outside the payload region was touched."""
+    data, _report, _used = measured
+    values = data["difference"]["values"]
+    start, end = data["region"]
+    span = len(values)
+
+    inside = [v for i, v in enumerate(values) if start <= (i + 0.5) / span < end]
+    # A bucket straddling either edge of the region genuinely holds changed
+    # samples, so the two boundary buckets are excluded rather than asserted
+    # to be clean: that overlap is bucketing, not embedding.
+    edge = 1.5 / span
+    outside = [
+        v for i, v in enumerate(values)
+        if (i + 0.5) / span < start - edge or (i + 0.5) / span > end + edge
+    ]
+
+    assert max(inside) > 0
+    assert max(outside) == 0
+    assert len(outside) > span // 3
+    assert data["difference"]["max"] <= 3       # two low bits at depth 2
+
+
+def test_difference_agrees_with_a_direct_count(measured, tmp_path):
+    data, report, _used = measured
+    before = audio_helpers.load(tmp_path / "cover.wav").carrier.astype(np.int64)
+    after = audio_helpers.load(report.output_path).carrier.astype(np.int64)
+
+    assert data["difference"]["changed"] == int(np.count_nonzero(before != after))
+
+
+def test_region_matches_where_the_payload_was_actually_written(measured):
+    data, report, used = measured
+    start, end = data["region"]
+
+    assert abs(start - report.offset / data["units"]) < 1e-4
+    assert abs(end - (report.offset + used) / data["units"]) < 1e-4
+
+
+def test_chi_square_scores_stay_in_range(measured):
+    data, _report, _used = measured
+    for side in ("cover", "stego"):
+        assert all(0.0 <= v <= 1.0 for v in data["chi"][side]["values"])
+
+
+def test_detection_is_reported_against_the_cover_as_a_control(measured):
+    """This test both misses real payloads and fires on untouched covers, so
+    it is never reported as a bare verdict."""
+    data, _report, _used = measured
+    detection = data["detection"]
+
+    assert detection["separation"] in {"clear", "partial", "none"}
+    assert "control_peak" in detection and "stego_peak" in detection
+    assert len(detection["note"]) > 60
+
+
+def test_an_untouched_cover_compared_with_itself_shows_no_difference(tmp_path, signer):
+    import steganalysis
+
+    source = tmp_path / "flat.wav"
+    write_wav(source, frames=40000)
+    carrier = audio_helpers.load(source).carrier
+
+    data = steganalysis.analyse(carrier, carrier.copy(), "audio", 2, 0, 0)
+
+    assert data["difference"]["max"] == 0
+    assert data["difference"]["changed"] == 0
+    assert data["detection"]["separation"] == "none"
+
+
+def test_analysis_runs_for_every_cover_kind(tmp_path, cover, signer):
+    import steganalysis
+
+    wav_path = tmp_path / "c.wav"
+    write_wav(wav_path, frames=40000)
+    for source, kind in ((cover, "image"), (wav_path, "audio")):
+        out = tmp_path / f"s_{kind}{workflow.STEGO_SUFFIX[kind]}"
+        report = workflow.protect(source, out, b"payload " * 400, "n.txt", KEY, 2, signer)
+        used = workflow.units_required(
+            2, len(security.canonical_json(report.payload)), 256, report.payload["msg_len"]
+        )
+        data = steganalysis.analyse(
+            workflow.load_media(source).carrier, workflow.load_media(out).carrier,
+            kind, 2, report.offset, used,
+        )
+        assert data["kind"] == kind
+        assert max(data["difference"]["values"]) > 0
+
+
+def test_analysis_endpoint_serves_the_measurements(walkthrough_client):
+    protected = post_multipart(walkthrough_client, "/api/protect", {
+        "sample": "audio_medium.wav", "key": "analysis pass", "lsb_n": "2",
+        "message": "a hidden message for the analysis panel",
+    }).get_json()
+
+    data = post_multipart(
+        walkthrough_client, "/api/analysis", {"id": protected["id"]}
+    ).get_json()
+
+    assert data["kind"] == "audio"
+    assert len(data["waveform"]["stego"]["high"]) > 100
+    assert data["detection"]["separation"] in {"clear", "partial", "none"}
+
+
+def test_analysis_endpoint_rejects_unknown_and_malformed_runs(walkthrough_client):
+    for run_id in ("", "not-hex", "a" * 31, "z" * 32):
+        response = post_multipart(walkthrough_client, "/api/analysis", {"id": run_id})
+        assert response.status_code == 400
+
+    missing = post_multipart(walkthrough_client, "/api/analysis", {"id": "b" * 32})
+    assert missing.status_code == 400

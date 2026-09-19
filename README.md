@@ -209,7 +209,54 @@ verifying browser. Anything not positively identified is sent as a generic
 attachment, so an extracted file is never interpreted by the browser checking
 it.
 
-### 8. Attack simulation
+### 8. Steganalysis
+
+Audio hides a payload too well to hear. A six-second cover carrying a
+700-byte payload has under one per cent of its samples altered, each by a few
+parts in 65,536, and the result is indistinguishable by ear at any embedding
+depth. Playing the two files side by side therefore proves nothing either
+way, so the analysis panel measures the difference instead of asking a
+listener to find it.
+
+Two charts, styled as a patient monitor rather than a report:
+
+- **Waveform** — the signal itself, cover and stego, on one scale. They
+  overlap exactly, which is the finding rather than a missing chart. The
+  trace lights up under a moving head in time with the player above it, so
+  the picture connects to the sound instead of sitting beside it; clicking a
+  trace seeks to that point. A static waveform is hard to relate to what you
+  are hearing, and this is the whole reason the view exists.
+- **Difference** — the largest change per slice, in raw carrier units. Flat
+  everywhere, then a solid block exactly where the payload sits. This needs
+  the original file, so it explains rather than attacks — but it is the
+  direct answer to a difference no one can hear.
+
+`steganalysis.py` also computes a low-bit plane and a windowed
+Westfeld-Pfitzmann chi-square scan, which the panel no longer draws. They are
+kept because the measurements behind them are worth reporting.
+
+**The chi-square result would not be honest as a verdict.** Measured across
+depths, payload sizes and cover types, the test both misses real payloads and
+fires on untouched covers: at 1 LSB an untouched image scored 0.77 where the
+protected copy scored 0.92, and on a video whose payload filled 2% of the
+carrier it scored zero on both. It depends on the value histogram having
+local structure for LSB replacement to flatten, and depth, payload size and
+cover content all change how much structure is there. `analyse()` therefore
+scores the original through the same test as a control and reports the two
+side by side rather than a confident answer.
+
+A second finding came out of the same measurements, and it is worth stating
+plainly: **the low bits of our 16-bit audio are already indistinguishable
+from random before anything is hidden in them.** Adjacent-sample LSB
+transition rates are 0.4986 for the cover and 0.5003 for the stego file, and
+the low two bits are uniform to within noise in both. With 65,536 amplitude
+levels, harmonics, decay envelopes and quantisation leave no structure in the
+bottom bits for embedding to disturb. LSB steganalysis works far better on
+8-bit images, where 256 levels and smooth gradients leave the histogram
+highly structured. The payload is present and verifiable; this class of test
+simply cannot see it.
+
+### 9. Attack simulation
 
 `attacks.py` stages eight attacks against a protected file and states the
 verdict each should produce. Six mutate a copy of the file; two are mistakes
@@ -236,7 +283,7 @@ want, and the module reports the reason rather than omitting the case:
   it lands in. The record binds to media content, not to one instance of it. A
   per-instance binding would need something the cover itself cannot supply.
 
-### 9. Verdicts
+### 10. Verdicts
 
 | Step | Check | Verdict on failure |
 |---|---|---|
@@ -281,7 +328,7 @@ the signature (`Signature Invalid`). Editing the media *outside* it, above the L
 planes, leaves the signature perfectly valid and is caught by the hash instead
 (`Tampered`). Different mechanisms, different verdicts.
 
-### 10. Video cover object (optional challenge)
+### 11. Video cover object (optional challenge)
 
 Video is not required by the spec, only permitted as an optional extension.
 The design goal was to add it without writing a second embedding path:

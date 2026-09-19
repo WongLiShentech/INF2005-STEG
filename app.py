@@ -13,6 +13,7 @@ from werkzeug.utils import secure_filename
 import attacks
 import make_demo_files
 import security
+import steganalysis
 import video_helpers
 import workflow
 
@@ -112,6 +113,17 @@ def public_key_from_form():
     pem = source.read_bytes()
     fingerprint = hashlib.sha256(pem).hexdigest()[:16]
     return security.load_public_key(source), source.name, fingerprint
+
+
+def _payload_lengths(report):
+    """(record, signature, message) byte lengths for one protected file.
+
+    bytes_used is their sum, and the other two are known exactly, so the
+    signature length follows without the report having to carry it.
+    """
+    record = len(security.canonical_json(report.payload))
+    message = report.payload["msg_len"]
+    return record, report.bytes_used - record - message, message
 
 
 def make_video_preview(path):
@@ -481,6 +493,23 @@ def walkthrough_protect():
             encrypt=request.form.get("encrypt") == "on", offset=offset,
         )
         evidence = workflow.protection_evidence(cover, report)
+
+        # Measured now, while both carriers are already loaded and the layout
+        # is known, then written beside the run rather than returned inline:
+        # the arrays are far larger than the rest of the response and only
+        # the analysis panel ever wants them.
+        (WORKSPACE / f"{run_id}_analysis.json").write_text(
+            json.dumps(steganalysis.analyse(
+                workflow.load_media(cover).carrier,
+                workflow.load_media(output).carrier,
+                kind, depth, report.offset,
+                workflow.units_required(
+                    depth, *_payload_lengths(report),
+                ),
+            )),
+            encoding="utf-8",
+        )
+
         # Retain only filenames and depth, never the passphrase or private key.
         (WORKSPACE / f"{run_id}_run.json").write_text(json.dumps({
             "cover": cover.name, "output": output.name, "depth": depth,
@@ -517,6 +546,25 @@ def walkthrough_run():
             raise InputError("stored file is missing or outside the workspace")
         run[field] = path
     return run
+
+
+@app.post("/api/analysis")
+def walkthrough_analysis():
+    """Serve the measurements taken when this run was protected.
+
+    Kept out of the protect response because the arrays dwarf everything
+    else there, and only the analysis panel asks for them.
+    """
+    try:
+        run_id = request.form.get("id", "")
+        if len(run_id) != 32 or any(c not in "0123456789abcdef" for c in run_id):
+            raise InputError("invalid run identifier")
+        stored = WORKSPACE / f"{run_id}_analysis.json"
+        if not stored.is_file():
+            raise InputError("no analysis is available for that run")
+        return app.response_class(stored.read_text(encoding="utf-8"), mimetype="application/json")
+    except InputError as exc:
+        return jsonify(error=str(exc)), 400
 
 
 @app.post("/api/verify")

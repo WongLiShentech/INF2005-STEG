@@ -1,5 +1,5 @@
 INF2005 ACW1 demo sample generation
-Generated 2026-09-18 18:03:35Z
+Generated 2026-09-19 05:06:28Z
 Derivation passphrase: 'team demo key'
 ========================================================================
 
@@ -12,9 +12,9 @@ Small cover  48 x 48 PNG, 6,912 carrier values
 
 P1 protect: offset 44,440, 769 of 89,664 bytes at 2 LSB
 OK P1  image, short message, authentic
-     file      testFiles\protected\P1_image_short_n2.png
+     file      testFiles/protected/P1_image_short_n2.png
      verdict   Authentic   (expected Authentic)
-     reason    signed by INF2005 ACW1 Media Verification at 2026-09-18T18:03:36Z, and the media is unchanged.
+     reason    signed by INF2005 ACW1 Media Verification at 2026-09-19T05:06:28Z, and the media is unchanged.
        PASS  Container: 420 x 320 PNG, 403,200 carrier values
        PASS  Start location: payload marker found at offset 44,440
        PASS  Header: version 1, depth 2 LSB, 423-byte record, 256-byte signature, message plaintext
@@ -26,9 +26,9 @@ OK P1  image, short message, authentic
 
 P2 protect: offset 188,263, 1,240 of 170,416 bytes at 4 LSB
 OK P2  audio, large message, authentic
-     file      testFiles\protected\P2_audio_large_n4.wav
+     file      testFiles/protected/P2_audio_large_n4.wav
      verdict   Authentic   (expected Authentic)
-     reason    signed by INF2005 ACW1 Media Verification at 2026-09-18T18:03:36Z, and the media is unchanged.
+     reason    signed by INF2005 ACW1 Media Verification at 2026-09-19T05:06:28Z, and the media is unchanged.
        PASS  Container: 6.0s WAV, 44,100 Hz, 2 channels, 16-bit, 529,200 carrier values
        PASS  Start location: payload marker found at offset 188,263
        PASS  Header: version 1, depth 4 LSB, 424-byte record, 256-byte signature, message plaintext
@@ -40,9 +40,9 @@ OK P2  audio, large message, authentic
 
 P3 protect: offset 44,440, 191 bytes in, 903 stored
 OK P3  image, custom encrypted payload, authentic
-     file      testFiles\protected\P3_image_custom_encrypted_n3.png
+     file      testFiles/protected/P3_image_custom_encrypted_n3.png
      verdict   Authentic   (expected Authentic)
-     reason    signed by INF2005 ACW1 Media Verification at 2026-09-18T18:03:37Z, and the media is unchanged.
+     reason    signed by INF2005 ACW1 Media Verification at 2026-09-19T05:06:28Z, and the media is unchanged.
        PASS  Container: 420 x 320 PNG, 403,200 carrier values
        PASS  Start location: payload marker found at offset 44,440
        PASS  Header: version 1, depth 3 LSB, 428-byte record, 256-byte signature, message encrypted
@@ -54,9 +54,9 @@ OK P3  image, custom encrypted payload, authentic
        PASS  Media hash: the file itself still hashes to the value the record commits to, measured above the 3 low bits the payload occupies
 
 OK P4  audio, custom encrypted payload, authentic
-     file      testFiles\protected\P4_audio_custom_encrypted_n2.wav
+     file      testFiles/protected/P4_audio_custom_encrypted_n2.wav
      verdict   Authentic   (expected Authentic)
-     reason    signed by INF2005 ACW1 Media Verification at 2026-09-18T18:03:37Z, and the media is unchanged.
+     reason    signed by INF2005 ACW1 Media Verification at 2026-09-19T05:06:29Z, and the media is unchanged.
        PASS  Container: 6.0s WAV, 44,100 Hz, 2 channels, 16-bit, 529,200 carrier values
        PASS  Start location: payload marker found at offset 188,263
        PASS  Header: version 1, depth 2 LSB, 428-byte record, 256-byte signature, message encrypted
@@ -69,9 +69,9 @@ OK P4  audio, custom encrypted payload, authentic
 
 P5 protect: offset 3,935,941, 775 of 1,089,588 bytes at 2 LSB
 OK P5  video, short message, authentic
-     file      testFiles\protected\P5_video_short_n2.avi
+     file      testFiles/protected/P5_video_short_n2.avi
      verdict   Authentic   (expected Authentic)
-     reason    signed by INF2005 ACW1 Media Verification at 2026-09-18T18:03:37Z, and the media is unchanged.
+     reason    signed by INF2005 ACW1 Media Verification at 2026-09-19T05:06:29Z, and the media is unchanged.
        PASS  Container: 320 x 240 AVI, 36 frames @ 12.00 fps, 3.0s, 8,294,400 carrier values
        PASS  Start location: payload marker found at offset 3,935,941
        PASS  Header: version 1, depth 2 LSB, 429-byte record, 256-byte signature, message plaintext
@@ -84,7 +84,7 @@ OK P5  video, short message, authentic
 ========================================================================
 
 OK N1  image edited outside the payload region
-     file      testFiles\tampered\N1_image_edited.png
+     file      testFiles/tampered/N1_image_edited.png
      verdict   Tampered   (expected Tampered)
      reason    the signature is valid, so the record is genuine, but the file no longer hashes to the value that record commits to. The media was edited outside the payload region.
        PASS  Container: 420 x 320 PNG, 403,200 carrier values
@@ -97,7 +97,7 @@ OK N1  image edited outside the payload region
        FAIL  Media hash: the signature is valid, so the record is genuine, but the file no longer hashes to the value that record commits to. The media was edited outside the payload region.
 
 OK N2  audio verified against a stranger's public key
-     file      testFiles\protected\P2_audio_large_n4.wav
+     file      testFiles/protected/P2_audio_large_n4.wav
      verdict   Signature Invalid   (expected Signature Invalid)
      reason    the signature does not verify under this public key. Either the payload bytes were altered or the file was signed by a different key.
        PASS  Container: 6.0s WAV, 44,100 Hz, 2 channels, 16-bit, 529,200 carrier values
@@ -106,27 +106,27 @@ OK N2  audio verified against a stranger's public key
        FAIL  Signature: the signature does not verify under this public key. Either the payload bytes were altered or the file was signed by a different key.
 
 OK N3  oversized payload blocked before embedding
-     file      testFiles\original\small_cover.png
+     file      testFiles/original/small_cover.png
      verdict   refused   (expected refusal)
      reason    this payload needs 1,225 bytes but the cover holds 466 bytes at 1 LSB
      written   no output file was created
 
 OK N4  image opened with the wrong passphrase
-     file      testFiles\protected\P1_image_short_n2.png
+     file      testFiles/protected/P1_image_short_n2.png
      verdict   Wrong Start Location   (expected Wrong Start Location)
      reason    no marker at offset 106,827, but one was found at 44,440. The file carries a payload; the passphrase or the chosen start location is wrong.
        PASS  Container: 420 x 320 PNG, 403,200 carrier values
        FAIL  Start location: no marker at offset 106,827, but one was found at 44,440. The file carries a payload; the passphrase or the chosen start location is wrong.
 
 OK N5  unprotected audio
-     file      testFiles\original\cover.wav
+     file      testFiles/original/cover.wav
      verdict   Payload Missing   (expected Payload Missing)
      reason    no payload marker anywhere in the searched region. This file does not appear to carry a payload.
        PASS  Container: 6.0s WAV, 44,100 Hz, 2 channels, 16-bit, 529,200 carrier values
        FAIL  Start location: no payload marker anywhere in the searched region. This file does not appear to carry a payload.
 
 OK N6  audio payload bytes altered
-     file      testFiles\tampered\N6_audio_payload_bits_flipped.wav
+     file      testFiles/tampered/N6_audio_payload_bits_flipped.wav
      verdict   Signature Invalid   (expected Signature Invalid)
      reason    the signature does not verify under this public key. Either the payload bytes were altered or the file was signed by a different key.
        PASS  Container: 6.0s WAV, 44,100 Hz, 2 channels, 16-bit, 529,200 carrier values
@@ -135,13 +135,13 @@ OK N6  audio payload bytes altered
        FAIL  Signature: the signature does not verify under this public key. Either the payload bytes were altered or the file was signed by a different key.
 
 OK N7  a non-media file renamed to .png
-     file      testFiles\tampered\N7_not_an_image.png
+     file      testFiles/tampered/N7_not_an_image.png
      verdict   Cannot Verify   (expected Cannot Verify)
-     reason    cannot identify image file 'C:\\Users\\mychw\\Documents\\GitHub\\INF2005-STEG\\testFiles\\tampered\\N7_not_an_image.png'
-       FAIL  Container: cannot identify image file 'C:\\Users\\mychw\\Documents\\GitHub\\INF2005-STEG\\testFiles\\tampered\\N7_not_an_image.png'
+     reason    cannot identify image file '/home/claude/review2/INF2005-STEG_UPDATED/testFiles/tampered/N7_not_an_image.png'
+       FAIL  Container: cannot identify image file '/home/claude/review2/INF2005-STEG_UPDATED/testFiles/tampered/N7_not_an_image.png'
 
 OK N8  a genuine payload replayed into another cover
-     file      testFiles\tampered\N8_audio_replayed_payload.wav
+     file      testFiles/tampered/N8_audio_replayed_payload.wav
      verdict   Tampered   (expected Tampered)
      reason    the signature is valid, so the record is genuine, but the file no longer hashes to the value that record commits to. The media was edited outside the payload region.
        PASS  Container: 6.0s WAV, 44,100 Hz, 2 channels, 16-bit, 529,200 carrier values
@@ -154,7 +154,7 @@ OK N8  a genuine payload replayed into another cover
        FAIL  Media hash: the signature is valid, so the record is genuine, but the file no longer hashes to the value that record commits to. The media was edited outside the payload region.
 
 OK N9  video edited outside the payload region
-     file      testFiles\tampered\N9_video_edited.avi
+     file      testFiles/tampered/N9_video_edited.avi
      verdict   Tampered   (expected Tampered)
      reason    the signature is valid, so the record is genuine, but the file no longer hashes to the value that record commits to. The media was edited outside the payload region.
        PASS  Container: 320 x 240 AVI, 36 frames @ 12.00 fps, 3.0s, 8,294,400 carrier values

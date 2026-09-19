@@ -104,18 +104,62 @@ def make_cover_image(path, width=420, height=320):
 
 
 def make_cover_audio(path, seconds=6, rate=44100, channels=2):
-    """A short two-channel tone with harmonics and a fade, so the hiss that
-    appears at high LSB depth is audible against something musical."""
+    """A short rhythmic phrase rather than a held tone.
+
+    A continuous tone is the wrong cover to demonstrate with, twice over. Its
+    waveform is a solid block, so a chart of it shows nothing a listener could
+    match to what they hear; and its low bits are equally busy from end to
+    end, which hides the one thing an analyst looks for. Notes that strike and
+    decay into a quiet floor give the waveform a shape, and give the low bits
+    somewhere quiet where a payload has nothing to hide behind.
+    """
     frames = rate * seconds
     t = np.arange(frames) / rate
-    left = 0.35 * np.sin(2 * np.pi * 220 * t) + 0.18 * np.sin(2 * np.pi * 440 * t)
-    right = 0.32 * np.sin(2 * np.pi * 277 * t) + 0.16 * np.sin(2 * np.pi * 554 * t)
-    envelope = np.minimum(1.0, np.minimum(t * 4, (seconds - t) * 4))
+    rng = np.random.default_rng(seed=20260911)
 
+    # A repeating phrase, so a clip of any length sounds like part of the
+    # same piece rather than an arbitrary slice of noise.
+    phrase = [220.0, 277.2, 329.6, 277.2, 220.0, 164.8, 196.0, 220.0]
+    note_length = 0.5
+    left = np.zeros(frames)
+    right = np.zeros(frames)
+
+    for index in range(int(seconds / note_length) + 1):
+        start_at = index * note_length
+        begin = int(start_at * rate)
+        if begin >= frames:
+            break
+        local = t[begin:] - start_at
+        # Struck, not switched on: a few milliseconds of attack, then an
+        # exponential decay that reaches the floor before the next note.
+        attack = np.clip(local / 0.012, 0, 1)
+        decay = np.exp(-local / 0.16)
+        shape = attack * decay
+        root = phrase[index % len(phrase)]
+        voice = (
+            0.55 * np.sin(2 * np.pi * root * local)
+            + 0.22 * np.sin(2 * np.pi * root * 2 * local)
+            + 0.09 * np.sin(2 * np.pi * root * 3 * local)
+        )
+        left[begin:] += voice * shape
+        # The right channel trails slightly and sits a fifth up, so the two
+        # channels are related without being identical.
+        right[begin:] += (
+            0.5 * np.sin(2 * np.pi * root * 1.5 * local) + 0.2 * np.sin(2 * np.pi * root * 3 * local)
+        ) * np.clip((local - 0.03) / 0.012, 0, 1) * np.exp(-np.maximum(local - 0.03, 0) / 0.14)
+
+    # A faint room floor. Real recordings are never digitally silent, and a
+    # cover that was would make embedding audible as clicks in the gaps.
+    floor = rng.normal(0, 0.0016, size=frames)
+    left, right = left + floor, right + rng.normal(0, 0.0016, size=frames)
+
+    fade = np.minimum(1.0, np.minimum(t * 12, (seconds - t) * 12))
     interleaved = np.empty(frames * channels)
-    interleaved[0::2] = left * envelope
-    interleaved[1::2] = right * envelope
-    samples = np.clip(interleaved * 28000, -32768, 32767).astype("<i2")
+    interleaved[0::2] = left * fade
+    interleaved[1::2] = right * fade
+
+    peak = np.max(np.abs(interleaved)) or 1.0
+    samples = np.clip(interleaved / peak * 26000, -32768, 32767).astype("<i2")
 
     with wave.open(str(path), "wb") as out:
         out.setnchannels(channels)
