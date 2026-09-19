@@ -317,16 +317,23 @@ whole flattened carrier, unchanged from the image and audio paths. An edit
 to any frame, whether or not it carries payload bits, is caught by `Tampered`
 the same way an edit anywhere in an image or a waveform already is.
 
-**No browser reliably plays the protected file back.** FFV1-in-AVI is
-bit-exact, which is what verification needs, but it is not something any
-major browser's `<video>` element is guaranteed to decode — an attempt to
-switch the codec itself to lossless H.264 (CRF/QP 0, universally
-browser-playable) found that this OpenCV build has no H.264 encoder
-available at all. Every check, hash and verdict is still computed correctly
-against the real file regardless — this is a display limitation, not a
-correctness one — but seeing a video cover or stego object play in the
-interface itself cannot be relied on; download the file and open it in a
-dedicated player (VLC, ffplay) to actually watch it.
+**No browser plays the protected file itself.** FFV1-in-AVI is bit-exact,
+which is what verification needs, but no major browser's `<video>` element
+decodes it — an attempt to switch the codec itself to lossless H.264
+(CRF/QP 0, universally browser-playable) found that OpenCV's bundled
+encoder is unavailable entirely in this environment. The fix keeps the two
+concerns apart instead of compromising either: every protect and verify
+request that touches a video additionally muxes a throwaway VP8/WebM copy
+— lossy, for the `<video>` tags in the interface only — while the download
+link, the signature, the hash and every verdict are always computed from
+the real FFV1 file. The preview is muxed by a real `ffmpeg` binary
+(`imageio-ffmpeg`, pip-installable, no separate download) rather than
+OpenCV's own `VideoWriter`: a check found no structural difference between
+the two for a small test clip, but ffmpeg is the far more battle-tested
+muxer, and this path only has to satisfy a browser, not this tool's own
+round-trip tests, so there was no reason to lean on the less-proven writer
+here. The interface says so next to the player, so what's being watched is
+never mistaken for what was actually checked.
 
 Uncompressed frame data is large, stated openly rather than hidden: a short,
 modest-resolution demo clip (320×240, a few seconds) runs a few megabytes to
@@ -386,11 +393,10 @@ distribute only `demo_public.pem`.
   long or high-resolution clip loads the entire frame stack into memory at
   once. Frame count is read by decoding to the end rather than trusted from
   container metadata, because some containers misreport it.
-- No browser reliably plays the protected AVI/FFV1 file back in the
-  interface itself. Every check, hash and verdict is still computed
-  correctly against the real file — this is a display limitation, not a
-  correctness one — but a video cover or stego object should be downloaded
-  and opened in a dedicated player to actually watch it.
+- The browser preview of a video (a lossy WebM copy, muxed by ffmpeg because
+  no browser decodes FFV1) is a second encode of every frame on top of the
+  real one, doubling the encoding work per video request, and it is
+  regenerated from scratch each time rather than cached.
 - Encryption protects the message, not the record. The payload JSON — media ID,
   timestamp, team, issuer — is readable by anyone who finds the start location,
   because the verifier has to read it before deciding anything.

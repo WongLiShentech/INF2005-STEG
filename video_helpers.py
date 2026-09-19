@@ -8,9 +8,11 @@ array an image's pixel grid already does, with frame count standing in as
 one more dimension before the flatten.
 """
 
+import subprocess
 from pathlib import Path
 
 import cv2
+import imageio_ffmpeg
 import numpy as np
 
 MEDIA_TYPE = "video/x-msvideo"
@@ -31,6 +33,18 @@ FOURCC = cv2.VideoWriter_fourcc(*"FFV1")
 READABLE_SUFFIXES = {".avi", ".mp4", ".mov", ".mkv"}
 
 DEFAULT_FPS = 30.0
+
+# A lossy, browser-playable copy for display only — never read back by this
+# tool and never what protect()/verify() operate on. No browser decodes
+# FFV1-in-AVI (an H.264 spike found the encoder unavailable in OpenCV's
+# build entirely; VP8-in-WebM is what every major browser's <video> element
+# natively decodes). Muxed by a real ffmpeg binary rather than OpenCV's own
+# VideoWriter: a duration-header check found no difference between the two
+# for a small test clip, but ffmpeg is the far more battle-tested muxer, and
+# this path only has to satisfy a browser, not this tool's own round-trip
+# tests, so there is no reason to lean on the less-proven writer here.
+PREVIEW_SUFFIX = ".webm"
+FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
 
 
 class VideoCarrier:
@@ -69,6 +83,23 @@ class VideoCarrier:
                 writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
         finally:
             writer.release()
+
+    def save_preview(self, path):
+        """A lossy WebM/VP8 copy of this exact frame stack, for the browser
+        to play. Not the protected artifact — nothing downloads this, and
+        nothing verifies against it."""
+        command = [
+            FFMPEG_EXE, "-y",
+            "-f", "rawvideo", "-pix_fmt", "rgb24",
+            "-s", f"{self.width}x{self.height}", "-r", f"{self.fps}",
+            "-i", "-",
+            "-c:v", "libvpx", "-pix_fmt", "yuv420p",
+            str(path),
+        ]
+        result = subprocess.run(command, input=self.frames.tobytes(), capture_output=True)
+        if result.returncode != 0 or not Path(path).is_file():
+            detail = result.stderr.decode(errors="replace")[-300:]
+            raise ValueError(f"could not encode a preview for this video: {detail}")
 
 
 def load(path):

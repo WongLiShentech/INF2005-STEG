@@ -13,10 +13,16 @@ from werkzeug.utils import secure_filename
 import attacks
 import make_demo_files
 import security
+import video_helpers
 import workflow
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024
+# Templates are cached in memory once compiled unless this is set, which is
+# fine for a demo but repeatedly cost real debugging time during development:
+# a template edit silently had no effect until the whole process, not just
+# the browser, was restarted. Always keeping this on removes that trap.
+app.config["TEMPLATES_AUTO_RELOAD"] = True
 
 ROOT = Path(app.root_path)
 WORKSPACE = ROOT / "workspace"
@@ -108,6 +114,22 @@ def public_key_from_form():
     return security.load_public_key(source), source.name, fingerprint
 
 
+def make_video_preview(path):
+    """A lossy WebM copy of a video, stored in the workspace, so the GUI can
+    play it. No browser decodes the lossless AVI/FFV1 files this tool
+    actually protects and verifies, so the figures show this instead — the
+    download link and every verification always point at the real file.
+    Returns None rather than raising, since a missing preview should not
+    break protection or verification themselves."""
+    try:
+        carrier = video_helpers.load(path)
+        name = f"{Path(path).stem}_preview{video_helpers.PREVIEW_SUFFIX}"
+        carrier.save_preview(WORKSPACE / name)
+        return url_for("media", filename=name)
+    except (ValueError, OSError):
+        return None
+
+
 @app.get("/")
 @app.get("/walkthrough")
 def walkthrough_page():
@@ -197,6 +219,8 @@ def protect():
         context["cover_url"] = url_for("media", filename=stored)
         context["cover"] = workflow.load_media(cover_path).describe()
         context["kind"] = kind
+        if kind == "video":
+            context["cover_preview_url"] = make_video_preview(cover_path)
 
         # The protected file has to keep its own kind: a WAV written with a
         # .png suffix would be unopenable by either decoder.
@@ -216,6 +240,8 @@ def protect():
         context["report"] = report
         context["payload_json"] = json.dumps(report.payload, indent=2)
         context["stego_url"] = url_for("media", filename=output_name)
+        if kind == "video":
+            context["stego_preview_url"] = make_video_preview(WORKSPACE / output_name)
     except workflow.CapacityError as exc:
         context["capacity_error"] = str(exc)
     except (InputError, workflow.UnsupportedMedia, OSError, ValueError) as exc:
@@ -236,12 +262,16 @@ def verify():
         context["key_name"] = key_name
         context["key_fingerprint"] = fingerprint
         context["kind"] = workflow.media_kind(path)
+        if context["kind"] == "video":
+            context["stego_preview_url"] = make_video_preview(path)
 
         # Optional: the untouched cover, so the two can be compared on screen.
         original_name, original_path = store_upload("original", required=False)
         if original_name:
             context["cover_url"] = url_for("media", filename=original_name)
             context["cover_kind"] = workflow.media_kind(original_path)
+            if context["cover_kind"] == "video":
+                context["cover_preview_url"] = make_video_preview(original_path)
 
         result = workflow.verify(path, key, public_key, chosen_offset())
         context["result"] = result
@@ -455,10 +485,14 @@ def walkthrough_protect():
         (WORKSPACE / f"{run_id}_run.json").write_text(json.dumps({
             "cover": cover.name, "output": output.name, "depth": depth,
         }), encoding="utf-8")
-        return jsonify(
+        response = dict(
             id=run_id, kind=kind, cover=url_for("media", filename=cover.name),
             output=url_for("media", filename=output.name), **evidence,
         )
+        if kind == "video":
+            response["cover_preview"] = make_video_preview(cover)
+            response["output_preview"] = make_video_preview(output)
+        return jsonify(response)
     except (InputError, workflow.CapacityError, workflow.UnsupportedMedia, OSError, ValueError) as exc:
         for path in (cover, output):
             if path is not None:

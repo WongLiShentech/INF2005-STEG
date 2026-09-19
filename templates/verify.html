@@ -86,19 +86,24 @@
     {% if cover_url %}
     <figure>
       {% if cover_kind == 'audio' %}<audio controls src="{{ cover_url }}"></audio>
-      {% elif cover_kind == 'video' %}<video controls src="{{ cover_url }}"></video>
+      {% elif cover_kind == 'video' %}
+        {% if cover_preview_url %}<video controls src="{{ cover_preview_url }}"></video>
+        {% else %}<p class="hint">No preview could be generated for this video.</p>{% endif %}
       {% else %}<img src="{{ cover_url }}" alt="the original cover object">{% endif %}
       <figcaption>Original cover &mdash; before protection</figcaption>
     </figure>
     {% endif %}
     <figure>
       {% if kind == 'audio' %}<audio controls src="{{ stego_url }}"></audio>
-      {% elif kind == 'video' %}<video controls src="{{ stego_url }}"></video>
+      {% elif kind == 'video' %}
+        {% if stego_preview_url %}<video controls src="{{ stego_preview_url }}"></video>
+        {% else %}<p class="hint">No preview could be generated for this video.</p>{% endif %}
       {% else %}<img src="{{ stego_url }}" alt="the file being verified">{% endif %}
       <figcaption>The file as received</figcaption>
     </figure>
   </div>
   {% if cover_url %}<p class="hint">Side by side at low depth the two should be indistinguishable. That is the whole idea: a cover object that looks altered has already failed at hiding, whatever the verdict says.</p>{% endif %}
+  {% if kind == 'video' or cover_kind == 'video' %}<p class="hint">Video players above show a lossy WebM preview, generated only for display &mdash; no browser can decode the lossless AVI (FFV1) file this tool actually verifies. The verdict is reached from the real file, never the preview.</p>{% endif %}
 
   {% if result.payload %}
   <dl class="facts">

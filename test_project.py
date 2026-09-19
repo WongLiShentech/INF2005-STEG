@@ -676,6 +676,39 @@ def test_a_protected_video_file_must_be_written_as_avi(video, tmp_path, signer):
         workflow.protect(video, tmp_path / "stego.png", b"hi", "n.txt", KEY, 1, signer)
 
 
+def test_video_preview_is_playable_but_not_bit_exact(video, tmp_path):
+    """The preview exists only because no browser can decode FFV1-in-AVI; it
+    is lossy by construction (VP8) and must never be mistaken for the
+    protected artifact itself. Muxed by a real ffmpeg binary rather than
+    cv2.VideoWriter, so its round-trip is verified with cv2 as an
+    independent reader, not the same code path that wrote it."""
+    carrier = video_helpers.load(video)
+    preview = tmp_path / "preview.webm"
+
+    carrier.save_preview(preview)
+
+    assert preview.is_file() and preview.stat().st_size > 0
+    reloaded = read_all_frames(preview)
+    assert reloaded.shape == carrier.frames.shape
+    assert not np.array_equal(reloaded, carrier.frames)  # lossy, as expected
+
+
+def read_all_frames(path):
+    import cv2
+
+    capture = cv2.VideoCapture(str(path))
+    frames = []
+    try:
+        while True:
+            ok, frame = capture.read()
+            if not ok:
+                break
+            frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    finally:
+        capture.release()
+    return np.stack(frames)
+
+
 def test_image_audio_and_video_share_one_codec(wav, cover, video, tmp_path, signer):
     """All three kinds run the identical embed/verify path; only loading differs."""
     image_out, _ = protect_to(cover, tmp_path, signer, message=b"same message")
@@ -719,6 +752,41 @@ def test_web_app_protects_and_verifies_video(client, tmp_path):
 
     assert workflow.AUTHENTIC in verdict_page
     assert "hidden inside a video file" in verdict_page
+
+
+def test_web_app_video_pages_offer_a_playable_preview(client, tmp_path):
+    """The compare figures must show a browser-playable preview, but the
+    download link and everything verification reads must still be the real
+    lossless AVI, never the lossy preview."""
+    web, _ = client
+    source = write_video(tmp_path / "cover.avi")
+    video_bytes = source.read_bytes()
+
+    page = post_multipart(
+        web,
+        "/protect",
+        {
+            "file": (io.BytesIO(video_bytes), "cover.avi"),
+            "key": "shared key",
+            "lsb_n": "2",
+            "message": "hidden inside a video file",
+        },
+    ).get_data(as_text=True)
+
+    stego_name = re.search(r"/media/([A-Za-z0-9_]+_stego\.avi)", page).group(1)
+    preview_url = re.search(r'<video controls src="(/media/[^"]+\.webm)">', page).group(1)
+    download_href = re.search(r'<a class="download" href="([^"]+)"', page).group(1)
+
+    assert download_href == f"/media/{stego_name}"  # the real file, not the preview
+    assert web.get(preview_url).status_code == 200
+    assert web.get(f"/media/{stego_name}").status_code == 200
+
+    stego = web.get(f"/media/{stego_name}").get_data()
+    verdict_page = post_multipart(
+        web, "/verify", {"file": (io.BytesIO(stego), "stego.avi"), "key": "shared key"}
+    ).get_data(as_text=True)
+    assert workflow.AUTHENTIC in verdict_page
+    assert re.search(r'<video controls src="(/media/[^"]+\.webm)">', verdict_page)
 
 
 # --- key separation and message encryption ---
@@ -1424,6 +1492,15 @@ def test_walkthrough_sample_round_trip(walkthrough_client, sample):
     assert 0 < report["max_change"] <= 3
     assert report["psnr"] > 0
     assert web.get(report["output"]).status_code == 200
+    if report["kind"] == "video":
+        # No browser decodes the lossless AVI this tool actually protects,
+        # so the walkthrough studio must also offer a playable preview.
+        assert report["cover_preview"].endswith(".webm")
+        assert report["output_preview"].endswith(".webm")
+        assert web.get(report["cover_preview"]).status_code == 200
+        assert web.get(report["output_preview"]).status_code == 200
+    else:
+        assert "cover_preview" not in report
     result = web.post("/api/verify", data={
         "id": report["id"], "key": "walkthrough key",
         "public_key_name": "demo_public.pem",

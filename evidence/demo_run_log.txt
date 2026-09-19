@@ -1,5 +1,5 @@
 INF2005 ACW1 demo sample generation
-Generated 2026-09-18 10:06:11Z
+Generated 2026-09-18 18:03:35Z
 Derivation passphrase: 'team demo key'
 ========================================================================
 
@@ -14,7 +14,7 @@ P1 protect: offset 44,440, 769 of 89,664 bytes at 2 LSB
 OK P1  image, short message, authentic
      file      testFiles\protected\P1_image_short_n2.png
      verdict   Authentic   (expected Authentic)
-     reason    signed by INF2005 ACW1 Media Verification at 2026-09-18T10:06:13Z, and the media is unchanged.
+     reason    signed by INF2005 ACW1 Media Verification at 2026-09-18T18:03:36Z, and the media is unchanged.
        PASS  Container: 420 x 320 PNG, 403,200 carrier values
        PASS  Start location: payload marker found at offset 44,440
        PASS  Header: version 1, depth 2 LSB, 423-byte record, 256-byte signature, message plaintext
@@ -28,7 +28,7 @@ P2 protect: offset 188,263, 1,240 of 170,416 bytes at 4 LSB
 OK P2  audio, large message, authentic
      file      testFiles\protected\P2_audio_large_n4.wav
      verdict   Authentic   (expected Authentic)
-     reason    signed by INF2005 ACW1 Media Verification at 2026-09-18T10:06:13Z, and the media is unchanged.
+     reason    signed by INF2005 ACW1 Media Verification at 2026-09-18T18:03:36Z, and the media is unchanged.
        PASS  Container: 6.0s WAV, 44,100 Hz, 2 channels, 16-bit, 529,200 carrier values
        PASS  Start location: payload marker found at offset 188,263
        PASS  Header: version 1, depth 4 LSB, 424-byte record, 256-byte signature, message plaintext
@@ -42,7 +42,7 @@ P3 protect: offset 44,440, 191 bytes in, 903 stored
 OK P3  image, custom encrypted payload, authentic
      file      testFiles\protected\P3_image_custom_encrypted_n3.png
      verdict   Authentic   (expected Authentic)
-     reason    signed by INF2005 ACW1 Media Verification at 2026-09-18T10:06:13Z, and the media is unchanged.
+     reason    signed by INF2005 ACW1 Media Verification at 2026-09-18T18:03:37Z, and the media is unchanged.
        PASS  Container: 420 x 320 PNG, 403,200 carrier values
        PASS  Start location: payload marker found at offset 44,440
        PASS  Header: version 1, depth 3 LSB, 428-byte record, 256-byte signature, message encrypted
@@ -56,7 +56,7 @@ OK P3  image, custom encrypted payload, authentic
 OK P4  audio, custom encrypted payload, authentic
      file      testFiles\protected\P4_audio_custom_encrypted_n2.wav
      verdict   Authentic   (expected Authentic)
-     reason    signed by INF2005 ACW1 Media Verification at 2026-09-18T10:06:13Z, and the media is unchanged.
+     reason    signed by INF2005 ACW1 Media Verification at 2026-09-18T18:03:37Z, and the media is unchanged.
        PASS  Container: 6.0s WAV, 44,100 Hz, 2 channels, 16-bit, 529,200 carrier values
        PASS  Start location: payload marker found at offset 188,263
        PASS  Header: version 1, depth 2 LSB, 428-byte record, 256-byte signature, message encrypted
@@ -71,7 +71,7 @@ P5 protect: offset 3,935,941, 775 of 1,089,588 bytes at 2 LSB
 OK P5  video, short message, authentic
      file      testFiles\protected\P5_video_short_n2.avi
      verdict   Authentic   (expected Authentic)
-     reason    signed by INF2005 ACW1 Media Verification at 2026-09-18T10:06:13Z, and the media is unchanged.
+     reason    signed by INF2005 ACW1 Media Verification at 2026-09-18T18:03:37Z, and the media is unchanged.
        PASS  Container: 320 x 240 AVI, 36 frames @ 12.00 fps, 3.0s, 8,294,400 carrier values
        PASS  Start location: payload marker found at offset 3,935,941
        PASS  Header: version 1, depth 2 LSB, 429-byte record, 256-byte signature, message plaintext

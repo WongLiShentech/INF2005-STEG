@@ -2,7 +2,7 @@
 const $=id=>document.getElementById(id),names=['Cover','Payload','Protect','Transfer','Receive','Verdict'];
 let activeStage=1;
 let stage=1,kind='image',mode='text',selectedSample='',samples=[],run=null,previewURL=null,attempt=0;
-const historyKey='steg-analysis-runs-v1';
+const historyKey='steg-analysis-runs-v2';
 let runs=[];
 try{const saved=JSON.parse(sessionStorage.getItem(historyKey)||'[]');if(Array.isArray(saved))runs=saved.filter(r=>r&&typeof r.id==='string'&&typeof r.cover==='string'&&r.cover.startsWith('/media/')&&typeof r.output==='string'&&r.output.startsWith('/media/'));}catch{}
 function showTab(name){const demo=name==='demo';$('demo-panel').hidden=!demo;$('analysis-panel').hidden=demo;for(const id of ['demo','analysis']){const selected=(id===name);$(id+'-tab').setAttribute('aria-selected',String(selected));$(id+'-tab').tabIndex=selected?0:-1;}document.querySelectorAll('audio,video').forEach(el=>el.pause());}
@@ -19,14 +19,14 @@ function renderHistory(){
   const heading=document.createElement('h3');heading.textContent='Run '+(i+1)+' / '+d.kind+' / '+d.depth+' LSB';
   const detail=document.createElement('p');detail.className='muted';detail.textContent=d.input_bytes+' B payload / '+d.used_bytes+' B embedded / '+(d.encrypted?'AES-256-GCM':'Encryption off');
   const compare=document.createElement('div');compare.className='compare';
-  compare.append(imageOrAudio(d.cover,d.kind,'Original cover'),imageOrAudio(d.output,d.kind,'Stego object'));
+  compare.append(imageOrAudio(d.cover_preview||d.cover,d.kind,'Original cover'),imageOrAudio(d.output_preview||d.output,d.kind,'Stego object'));
   if(d.kind==='image')compare.querySelectorAll('img').forEach(img=>{const a=document.createElement('a');a.href=img.src;a.target='_blank';a.rel='noopener';a.title='Open full-resolution image';img.replaceWith(a);a.append(img);});
   const metrics=document.createElement('div');metrics.className='metrics';
   for(const [label,value] of [['PSNR',d.psnr===null?'Infinite':d.psnr+' dB'],['Values changed',d.changed.toLocaleString()+' / '+d.changed_percent.toFixed(3)+'%'],['Largest value change',d.max_change]]){const box=document.createElement('div');box.className='metric';const name=document.createElement('small'),number=document.createElement('strong');name.textContent=label;number.textContent=value;box.append(name,number);metrics.append(box);}
   card.append(heading,detail,compare,metrics);$('analysis-runs').append(card);
  });
 }
-function rememberRun(d){if(runs.some(r=>r.id===d.id))return;const saved={};for(const key of ['id','kind','depth','cover','output','input_bytes','used_bytes','encrypted','psnr','changed','changed_percent','max_change'])saved[key]=d[key];runs.push(saved);try{sessionStorage.setItem(historyKey,JSON.stringify(runs));}catch{$('history-warning').textContent='Browser storage unavailable. Run history will be lost on refresh.';}renderHistory();}
+function rememberRun(d){if(runs.some(r=>r.id===d.id))return;const saved={};for(const key of ['id','kind','depth','cover','output','cover_preview','output_preview','input_bytes','used_bytes','encrypted','psnr','changed','changed_percent','max_change'])saved[key]=d[key];runs.push(saved);try{sessionStorage.setItem(historyKey,JSON.stringify(runs));}catch{$('history-warning').textContent='Browser storage unavailable. Run history will be lost on refresh.';}renderHistory();}
 renderHistory();
 $('clear-history').onclick=()=>{try{sessionStorage.removeItem(historyKey);}catch{$('history-warning').textContent='Unable to clear browser storage. Please enable browser storage and try again.';return;}document.querySelectorAll('#analysis-runs audio,#analysis-runs video').forEach(el=>el.pause());runs=[];$('history-warning').textContent='';renderHistory();};
 async function post(route,data){const response=await fetch(route,{method:'POST',body:data});let value;try{value=await response.json()}catch{throw Error('Unexpected server response. Reload the page and try again.')}if(!response.ok||value.error)throw Error(value.error||'Request failed');return value}

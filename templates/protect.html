@@ -72,19 +72,23 @@
   <div class="compare">
     <figure>
       {% if kind == 'audio' %}<audio controls src="{{ cover_url }}"></audio>
-      {% elif kind == 'video' %}<video controls src="{{ cover_url }}"></video>
+      {% elif kind == 'video' %}
+        {% if cover_preview_url %}<video controls src="{{ cover_preview_url }}"></video>
+        {% else %}<p class="hint">No preview could be generated for this video.</p>{% endif %}
       {% else %}<img src="{{ cover_url }}" alt="cover object before encoding">{% endif %}
       <figcaption>Cover &mdash; before</figcaption>
     </figure>
     <figure>
       {% if kind == 'audio' %}<audio controls src="{{ stego_url }}"></audio>
-      {% elif kind == 'video' %}<video controls src="{{ stego_url }}"></video>
+      {% elif kind == 'video' %}
+        {% if stego_preview_url %}<video controls src="{{ stego_preview_url }}"></video>
+        {% else %}<p class="hint">No preview could be generated for this video.</p>{% endif %}
       {% else %}<img src="{{ stego_url }}" alt="stego object after encoding">{% endif %}
       <figcaption>Stego &mdash; after</figcaption>
     </figure>
   </div>
   {% if kind == 'audio' %}<p class="hint">Play both. At low depth the two are indistinguishable; raise the depth and the hiss in the second one is the payload becoming audible.</p>{% endif %}
-  {% if kind == 'video' %}<p class="hint">Play both. At low depth the two are indistinguishable; raise the depth and the payload becomes visible as noise in whichever frame(s) it landed in.</p>{% endif %}
+  {% if kind == 'video' %}<p class="hint">Play both. At low depth the two are indistinguishable; raise the depth and the payload becomes visible as noise in whichever frame(s) it landed in. These players show a lossy WebM preview, generated only for display &mdash; no browser can decode the lossless AVI (FFV1) file this tool actually protects and verifies. The download link below is the real file.</p>{% endif %}
 
   <p><a class="download" href="{{ stego_url }}" download>Download the stego file</a> &mdash; send this to the person who needs to verify it.</p>
 
