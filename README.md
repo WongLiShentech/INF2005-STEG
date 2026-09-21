@@ -231,6 +231,45 @@ Two charts, styled as a patient monitor rather than a report:
   the original file, so it explains rather than attacks — but it is the
   direct answer to a difference no one can hear.
 
+**Charts are drawn for audio only.** An image or a video is judged by looking
+at it, and its card shows the cover, the stego object, and three figures: PSNR,
+values changed and largest value change. A difference in sound that nobody can
+hear is the one that needs showing, so only audio runs are measured and
+charted.
+
+Above the waveform and difference charts sits **Sound level**
+(`static/monitor.js`): the original and the stego file side by side, as a wave
+that sits low when the music is soft and rises when it is loud.
+
+It shows a fixed stretch rather than scrolling: an identical lead-in, the
+payload in a dashed box, and an identical tail. Nothing moves but the
+playhead, so a difference can be studied instead of watched go past. On the
+stego chart the original is laid over the top as a dashed white line; outside
+the box the two coincide, and inside it every gap is filled — red where the
+payload made that moment louder, blue where it made it quieter. Pointing at
+either chart marks the same instant on both and prints the exact values, for
+example `original 8,652 → stego 8,654 · louder by 2`.
+
+**Play both** plays the two files together, locked to the same sample, and
+drives only these two charts. The players above are separate: the original's
+player drives the original waveform, and the stego player drives the stego
+waveform and the difference chart.
+
+**Hearing the distortion.** The sample audio is 16-bit, so even depth 8 only
+rewrites the bottom 8 of 16 bits — a change of at most 255 against ±32,768,
+which is a faint hiss at worst. To hear it properly, use 8-bit audio, where
+there are only 256 levels and depth 8 rewrites the whole sample. Measured on
+the same song with the same payload:
+
+| Audio | Depth | Largest change | Noise vs music | Heard as |
+|---|---|---|---|---|
+| 16-bit | 8 | 245 of ±32,768 | 31 dB below | faint hiss |
+| 8-bit | 2 | 3 of ±128 | 19 dB below | clearly audible |
+| 8-bit | 4 | 15 of ±128 | 8 dB below | harsh noise |
+| 8-bit | 8 | 164 of ±128 | 13 dB above | noise louder than the music |
+
+At 8-bit depth 4 the Sound level chart needs no magnification at all.
+
 `steganalysis.py` also computes a low-bit plane and a windowed
 Westfeld-Pfitzmann chi-square scan, which the panel no longer draws. They are
 kept because the measurements behind them are worth reporting.

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>STEG / Demonstration studio</title>
-<link rel="stylesheet" href="{{ url_for('static', filename='walkthrough.css', v='wizard8') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='walkthrough.css', v='wizard12') }}">
 </head>
 <body>
 <header>
@@ -325,15 +325,16 @@
 </div>
 </div>
 <section id="analysis-panel" role="tabpanel" aria-labelledby="analysis-tab" hidden>
-<div class="analysis-heading"><div><h2>Original vs stego</h2><small>Completed demonstrations remain here after refresh in this browser tab. Images open at full resolution; audio plays the saved files.</small></div><div class="analysis-actions"><button class="secondary" id="clear-history" title="Clear comparisons from this browser tab; saved files are retained">Clear analysis history</button><button class="secondary" id="back-demo">Back to demo &rarr;</button></div></div>
-<p class="muted analysis-note">Distortion depends on LSB depth, payload size and cover size. A higher depth does not guarantee a noticeable difference.</p>
+<div class="analysis-heading"><div><h2>Original vs stego</h2><small>Runs stay here until you close this tab.</small></div><div class="analysis-actions"><button class="secondary" id="clear-history" title="Clear comparisons from this browser tab; saved files are retained">Clear analysis history</button><button class="secondary" id="back-demo">Back to demo &rarr;</button></div></div>
+<p class="muted analysis-note">Distortion depends on depth, payload size and cover size.</p>
 <p id="history-warning" class="error" role="status"></p>
 <p id="analysis-empty" class="notice">Protect a payload to add the first run.</p>
 <div id="analysis-runs"></div>
 </section>
 <p class="footer-note">Image and audio steganography / generated files retained in the workspace.</p>
 </main>
-<script src="{{ url_for('static', filename='walkthrough.js', v='wizard8') }}" defer>
+<script src="{{ url_for('static', filename='monitor.js', v='monitor4') }}" defer></script>
+<script src="{{ url_for('static', filename='walkthrough.js', v='wizard12') }}" defer>
 </script>
 </body>
 </html>

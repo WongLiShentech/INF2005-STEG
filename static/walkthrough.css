@@ -71,3 +71,27 @@ header{height:60px}main{max-width:1160px;padding-top:24px}.hero{margin-bottom:8p
 .chart-legend{display:flex;gap:18px;flex-wrap:wrap;margin-top:9px;font-size:11px;color:var(--muted)}
 .chart-legend span{display:flex;align-items:center;gap:6px}
 @media(max-width:700px){.chart-pair{grid-template-columns:1fr}.chart{height:112px}}
+
+/* --- sound level comparison --- */
+.live-monitor{margin-top:22px;padding:18px;border:1px solid var(--line);border-radius:12px;background:linear-gradient(180deg,#fbfcf8,#f5f6f0)}
+.lm-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
+.lm-title-row{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.lm-title-row h4{margin:0;font-size:15px}
+.lm-group-sub{font-size:12px;color:var(--muted)}
+.lm-controls{display:flex;align-items:center;gap:12px}
+.lm-time{font:600 12px/1 ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--muted);font-variant-numeric:tabular-nums}
+.lm-play{min-height:36px;min-width:124px;padding:0 18px;border:0;border-radius:999px;background:var(--green);color:#fff;font:700 13px/1 inherit;cursor:pointer;box-shadow:0 2px 8px rgba(18,104,85,.25)}
+.lm-play:hover{filter:brightness(1.08)}
+.lm-play:disabled{background:#9fb0a6;box-shadow:none;cursor:default}
+.lm-pair{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.lm-canvas{display:block;width:100%;height:240px;border-radius:9px;border:1px solid #16241d;background:#08120e;cursor:crosshair}
+.lm-now{margin-top:10px;padding:9px 12px;border-radius:8px;background:#eaefe9;font:600 12.5px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;font-variant-numeric:tabular-nums;color:#4d5f58;white-space:pre-wrap}
+.lm-now.higher{background:#fdebe8;color:#b32b1f}
+.lm-now.lower{background:#e8f1fd;color:#23609f}
+.lm-foot{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.lm-chip{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;background:#eaefe9;color:#4d5f58;font-size:11px;font-weight:600}
+.lm-swatch{display:inline-block}
+.lm-swatch.dot{width:8px;height:8px;border-radius:50%;background:var(--c)}
+.lm-swatch.box{width:12px;height:9px;border:1.5px dashed #c99a1e;border-radius:2px}
+.lm-swatch.dash{width:14px;height:0;border-top:2px dashed #7c8a84}
+@media(max-width:700px){.lm-pair{grid-template-columns:1fr}.lm-canvas{height:190px}.lm-head{flex-wrap:wrap}}

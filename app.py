@@ -494,21 +494,24 @@ def walkthrough_protect():
         )
         evidence = workflow.protection_evidence(cover, report)
 
-        # Measured now, while both carriers are already loaded and the layout
-        # is known, then written beside the run rather than returned inline:
-        # the arrays are far larger than the rest of the response and only
-        # the analysis panel ever wants them.
-        (WORKSPACE / f"{run_id}_analysis.json").write_text(
-            json.dumps(steganalysis.analyse(
-                workflow.load_media(cover).carrier,
-                workflow.load_media(output).carrier,
-                kind, depth, report.offset,
-                workflow.units_required(
-                    depth, *_payload_lengths(report),
-                ),
-            )),
-            encoding="utf-8",
-        )
+        # Charts are drawn for audio only: a difference nobody can hear needs
+        # showing, whereas an image or a video is judged by looking at it and
+        # by its PSNR. So the measurements are taken for audio alone, now,
+        # while both carriers are loaded, and written beside the run rather
+        # than returned inline, because the arrays dwarf the rest of the
+        # response.
+        if kind == "audio":
+            (WORKSPACE / f"{run_id}_analysis.json").write_text(
+                json.dumps(steganalysis.analyse(
+                    workflow.load_media(cover).carrier,
+                    workflow.load_media(output).carrier,
+                    kind, depth, report.offset,
+                    workflow.units_required(
+                        depth, *_payload_lengths(report),
+                    ),
+                )),
+                encoding="utf-8",
+            )
 
         # Retain only filenames and depth, never the passphrase or private key.
         (WORKSPACE / f"{run_id}_run.json").write_text(json.dumps({

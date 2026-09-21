@@ -23,7 +23,7 @@ function renderHistory(){
   if(d.kind==='image')compare.querySelectorAll('img').forEach(img=>{const a=document.createElement('a');a.href=img.src;a.target='_blank';a.rel='noopener';a.title='Open full-resolution image';img.replaceWith(a);a.append(img);});
   const metrics=document.createElement('div');metrics.className='metrics';
   for(const [label,value] of [['PSNR',d.psnr===null?'Infinite':d.psnr+' dB'],['Values changed',d.changed.toLocaleString()+' / '+d.changed_percent.toFixed(3)+'%'],['Largest value change',d.max_change]]){const box=document.createElement('div');box.className='metric';const name=document.createElement('small'),number=document.createElement('strong');name.textContent=label;number.textContent=value;box.append(name,number);metrics.append(box);}
-  card.append(heading,detail,compare,metrics);$('analysis-runs').append(card);attachCharts(card,d.id);
+  card.append(heading,detail,compare,metrics);$('analysis-runs').append(card);if(d.kind==='audio')attachCharts(card,d.id);
  });
 }
 function rememberRun(d){if(runs.some(r=>r.id===d.id))return;const saved={};for(const key of ['id','kind','depth','cover','output','cover_preview','output_preview','input_bytes','used_bytes','encrypted','psnr','changed','changed_percent','max_change'])saved[key]=d[key];runs.push(saved);try{sessionStorage.setItem(historyKey,JSON.stringify(runs));}catch{$('history-warning').textContent='Browser storage unavailable. Run history will be lost on refresh.';}renderHistory();}
@@ -220,6 +220,31 @@ function followPlayback(chart, media) {
   place();
 }
 
+/* The difference chart belongs to the stego file, so it follows the stego
+   player: a marker at the current moment, and a click seeks there. */
+function followDifference(chart, media) {
+  if (!media) return;
+  const head = shape('line', {x1: 0, y1: 0, x2: 0, y2: CHART.h, stroke: '#ffffff',
+                              'stroke-width': 2, 'vector-effect': 'non-scaling-stroke', opacity: 0});
+  chart.append(head);
+  chart.classList.add('seekable');
+  const place = () => {
+    if (!media.duration || !isFinite(media.duration)) return;
+    const x = (media.currentTime / media.duration) * CHART.w;
+    head.setAttribute('x1', x);
+    head.setAttribute('x2', x);
+    head.setAttribute('opacity', media.currentTime > 0 ? 1 : 0);
+  };
+  for (const event of ['timeupdate', 'seeked', 'loadedmetadata', 'play']) media.addEventListener(event, place);
+  media.addEventListener('ended', () => head.setAttribute('opacity', 0));
+  chart.addEventListener('click', event => {
+    if (!media.duration || !isFinite(media.duration)) return;
+    const box = chart.getBoundingClientRect();
+    media.currentTime = ((event.clientX - box.left) / box.width) * media.duration;
+    place();
+  });
+}
+
 /* Bars, not a line: the difference is zero almost everywhere, and a line
    drawn through zeros reads as "no data" rather than "no change". */
 function barsChart(values, region, colour) {
@@ -272,8 +297,7 @@ function analysisCharts(data) {
   const wrap = document.createElement('div');
   wrap.className = 'charts';
   const region = data.region;
-  const unit = data.kind === 'audio' ? 'sample' : 'carrier value';
-  const playable = data.kind !== 'image';
+  const unit = 'sample';
 
   /* 1. The signal itself, cover and stego, on one scale. */
   const pair = document.createElement('div');
@@ -290,21 +314,18 @@ function analysisCharts(data) {
   }
   wrap.waveCharts = waveCharts;
   wrap.append(chartBlock(
-    data.kind === 'audio' ? 'Waveform' : 'Signal envelope',
-    'Before and after protection, on the same scale. They are indistinguishable — that is the result, '
-      + 'not a missing chart. The lighter span marks where the payload actually sits. '
-      + (playable ? 'Press play above and the trace lights up under the marker in time with what you hear; '
-                  + 'click a trace to seek.' : ''),
+    'Waveform',
+    'Cover and stego on the same scale — they look identical. Dashed lines mark the payload. '
+      + 'Click a trace to jump there.',
     pair));
 
   /* 2. What actually changed, in raw units. */
   const diff = data.difference;
   wrap.append(chartBlock(
     'Difference from the cover',
-    'The largest change to any ' + unit + ' in each slice, in raw units — peaking at ' + diff.max
-      + ' across ' + diff.changed.toLocaleString() + ' changed ' + unit + 's, and flat everywhere else '
-      + 'because nothing outside the payload was touched. This is the answer to a difference no one can hear.',
-    barsChart(diff.values, region, CHART.stego),
+    'Largest change per slice: up to ' + diff.max + ' units across '
+      + diff.changed.toLocaleString() + ' ' + unit + 's. Zero everywhere else.',
+    (wrap.diffChart = barsChart(diff.values, region, CHART.stego)),
     legend([['Changed by up to ' + diff.max + ' units', CHART.stego],
             ['Payload region', 'transparent']])));
 
@@ -327,9 +348,19 @@ async function attachCharts(card, id) {
 
     // The two players sit above the charts, in the order cover then stego.
     const players = card.querySelectorAll('.compare audio, .compare video');
+    // Each player drives its own charts and nothing else: the original
+    // player its waveform, the stego player its waveform and the difference.
+    // The sound-level comparison has its own Play both.
     if (charts.waveCharts && players.length === 2) {
       followPlayback(charts.waveCharts.cover, players[0]);
       followPlayback(charts.waveCharts.stego, players[1]);
+      followDifference(charts.diffChart, players[1]);
+    }
+
+    // The live comparison reads the two WAV files sample by sample.
+    if (players.length === 2 && window.StegMonitor) {
+      const monitor = window.StegMonitor.create(players[0].src, players[1].src, data.region, card);
+      charts.insertBefore(monitor.element, charts.firstChild);
     }
   } catch (error) {
     holder.className = 'error';

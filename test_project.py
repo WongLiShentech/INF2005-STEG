@@ -1777,3 +1777,100 @@ def test_analysis_endpoint_rejects_unknown_and_malformed_runs(walkthrough_client
 
     missing = post_multipart(walkthrough_client, "/api/analysis", {"id": "b" * 32})
     assert missing.status_code == 400
+
+
+# --- live comparison monitor ---
+
+
+def test_live_monitor_script_loads_before_the_walkthrough(walkthrough_client):
+    """Both scripts are deferred, so document order is execution order: the
+    walkthrough can only mount the monitor if it has already been defined."""
+    page = walkthrough_client.get("/walkthrough").get_data(as_text=True)
+
+    assert "monitor.js" in page
+    assert page.index("monitor.js") < page.index("walkthrough.js")
+    assert walkthrough_client.get("/static/monitor.js").status_code == 200
+
+
+def test_charts_are_drawn_for_audio_runs_only():
+    """Image and video runs show only PSNR, values changed and largest
+    change; every chart, the live comparison included, is audio-only."""
+    import pathlib
+
+    script = (pathlib.Path(__file__).parent / "static" / "walkthrough.js").read_text(encoding="utf-8")
+
+    assert "if(d.kind==='audio')attachCharts(card,d.id);" in script
+    assert "charts.insertBefore(monitor.element, charts.firstChild)" in script
+
+
+@pytest.mark.parametrize("sample, charted", [
+    ("audio_short.wav", True),
+    ("image_small.png", False),
+    ("video_short.avi", False),
+])
+def test_measurements_are_taken_for_audio_only(walkthrough_client, sample, charted):
+    protected = post_multipart(walkthrough_client, "/api/protect", {
+        "sample": sample, "key": "kind pass", "lsb_n": "4", "message": "x",
+    }).get_json()
+
+    # The three figures every run shows, whatever its kind.
+    for figure in ("psnr", "changed", "max_change"):
+        assert figure in protected
+
+    response = post_multipart(walkthrough_client, "/api/analysis", {"id": protected["id"]})
+    assert (response.status_code == 200) is charted
+
+
+def test_audio_served_to_the_monitor_is_the_protected_file_itself(walkthrough_client, tmp_path):
+    """The monitor compares the two files sample by sample in the browser, so
+    what it downloads must be the real protected WAV, byte for byte, and not
+    a preview or a re-encoding."""
+    protected = post_multipart(walkthrough_client, "/api/protect", {
+        "sample": "audio_short.wav", "key": "monitor pass", "lsb_n": "2",
+        "message": "compared sample by sample in the browser",
+    }).get_json()
+
+    served = walkthrough_client.get(protected["output"]).get_data()
+    assert served[:4] == b"RIFF" and served[8:12] == b"WAVE"
+
+    copy = tmp_path / "served.wav"
+    copy.write_bytes(served)
+    public = security.load_public_key(
+        __import__("pathlib").Path(__file__).parent / "keys" / "demo_public.pem"
+    )
+    assert workflow.verify(copy, b"monitor pass", public).verdict == workflow.AUTHENTIC
+
+
+def test_eight_bit_audio_waveform_is_centred_on_silence(tmp_path):
+    """8-bit PCM is unsigned: silence is 128. Drawn without centring, every
+    waveform would sit above its axis and loud passages would be clipped."""
+    import steganalysis
+
+    path = tmp_path / "eight.wav"
+    rate, frames = 8000, 8000
+    tone = (128 + 90 * np.sin(2 * np.pi * 440 * np.arange(frames) / rate)).astype(np.uint8)
+    with wave.open(str(path), "wb") as out:
+        out.setnchannels(1)
+        out.setsampwidth(1)
+        out.setframerate(rate)
+        out.writeframes(tone.tobytes())
+
+    drawn = steganalysis.waveform(audio_helpers.load(path).carrier, "audio")
+
+    assert min(drawn["low"]) < -0.5 < 0.5 < max(drawn["high"])
+    assert abs(max(drawn["high"]) + min(drawn["low"])) < 0.05     # symmetric about zero
+
+
+def test_eight_bit_audio_distortion_is_large_enough_to_hear(tmp_path, signer):
+    """The reason to demo on 8-bit audio: the same depth that is inaudible in
+    16-bit moves each sample by a large share of its range."""
+    source = tmp_path / "eight.wav"
+    write_wav(source, frames=40000, width=1)
+    out = tmp_path / "stego.wav"
+    workflow.protect(source, out, b"x" * 8000, "n.txt", KEY, 4, signer)
+
+    before = audio_helpers.load(source).carrier.astype(int)
+    after = audio_helpers.load(out).carrier.astype(int)
+
+    assert np.abs(after - before).max() == 15              # 15 of a 256-level range
+    assert workflow.verify(out, KEY, signer.public_key()).verdict == workflow.AUTHENTIC

@@ -45,6 +45,10 @@ def _signed_view(carrier, kind):
     and the signal would be cut in half at zero."""
     if kind == "audio" and carrier.dtype.itemsize > 1:
         return carrier.view(np.dtype(f"<i{carrier.dtype.itemsize}"))
+    if kind == "audio":
+        # 8-bit PCM is the one unsigned audio format: silence is 128, not 0.
+        # Centring it is what puts the waveform on its axis.
+        return carrier.astype(np.int16) - 128
     return carrier
 
 
