@@ -1476,7 +1476,7 @@ def walkthrough_client(tmp_path, monkeypatch):
 @pytest.mark.parametrize("sample", [
     "image_small.png", "image_medium.png", "image_large.png",
     "audio_short.wav", "audio_medium.wav", "audio_long.wav",
-    "video_short.avi", "video_medium.avi", "video_long.avi",
+    "video_small.avi", "video_medium.avi", "video_large.avi",
 ])
 def test_walkthrough_sample_round_trip(walkthrough_client, sample):
     web = walkthrough_client
@@ -1600,7 +1600,7 @@ def test_walkthrough_sample_options_and_capacity(walkthrough_client):
         capacities[sample["name"]] = result["capacity"]["2"]
     assert capacities["image_small.png"] < capacities["image_medium.png"] < capacities["image_large.png"]
     assert capacities["audio_short.wav"] < capacities["audio_medium.wav"] < capacities["audio_long.wav"]
-    assert capacities["video_short.avi"] < capacities["video_medium.avi"] < capacities["video_long.avi"]
+    assert capacities["video_small.avi"] < capacities["video_medium.avi"] < capacities["video_large.avi"]
     assert not list(application.WORKSPACE.iterdir())
 
 
@@ -1806,7 +1806,7 @@ def test_charts_are_drawn_for_audio_runs_only():
 @pytest.mark.parametrize("sample, charted", [
     ("audio_short.wav", True),
     ("image_small.png", False),
-    ("video_short.avi", False),
+    ("video_small.avi", False),
 ])
 def test_measurements_are_taken_for_audio_only(walkthrough_client, sample, charted):
     protected = post_multipart(walkthrough_client, "/api/protect", {

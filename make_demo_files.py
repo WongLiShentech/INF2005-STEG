@@ -64,9 +64,13 @@ WALKTHROUGH_SAMPLES = [
     ("audio_short.wav", "Short", "audio", 1),
     ("audio_medium.wav", "Medium", "audio", 6),
     ("audio_long.wav", "Long", "audio", 30),
-    ("video_short.avi", "Short", "video", 1),
-    ("video_medium.avi", "Medium", "video", 3),
-    ("video_long.avi", "Long", "video", 6),
+    # Sized by resolution (width, height, seconds), the same axis image
+    # samples scale on, rather than by duration alone: a small/medium/large
+    # video should differ in capacity the same way a small/medium/large
+    # image does, not just in how long it plays.
+    ("video_small.avi", "Small", "video", (160, 120, 1)),
+    ("video_medium.avi", "Medium", "video", (320, 240, 3)),
+    ("video_large.avi", "Large", "video", (640, 480, 3)),
 ]
 
 
@@ -79,7 +83,8 @@ def make_walkthrough_samples(directory=ORIGINAL):
         if kind == "image":
             make_cover_image(path, *size)
         elif kind == "video":
-            make_cover_video(path, seconds=size)
+            width, height, seconds = size
+            make_cover_video(path, seconds=seconds, width=width, height=height)
         else:
             make_cover_audio(path, seconds=size)
 
