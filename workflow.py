@@ -454,6 +454,14 @@ def verify(path, derivation_key, public_key, offset=None):
 
 
 def _explain_missing_header(carrier, offset, trail):
+    """Tell a wrong passphrase apart from a genuinely unprotected file.
+
+    The bounded scan (below) has to look at the real embedded position to make
+    that call, but its result never reaches the caller: reporting where the
+    marker actually sits would hand an attacker the start location on any
+    failed guess, for free, with no need to know the passphrase at all. The
+    verdict alone carries the distinction; the position stays internal.
+    """
     found = _scan_for_magic(carrier)
     if found is None:
         detail = (
@@ -464,8 +472,8 @@ def _explain_missing_header(carrier, offset, trail):
             PAYLOAD_MISSING, detail, checks=_check(trail, "Start location", False, detail)
         )
     detail = (
-        f"no marker at offset {offset:,}, but one was found at {found:,}. The file "
-        "carries a payload; the passphrase or the chosen start location is wrong."
+        f"no marker at the expected offset {offset:,}. A payload exists elsewhere in "
+        "the file, so the passphrase or the chosen start location does not match it."
     )
     return Result(
         WRONG_START_LOCATION, detail, checks=_check(trail, "Start location", False, detail)
