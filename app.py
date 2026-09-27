@@ -435,6 +435,22 @@ def walkthrough_sample(name):
     return send_from_directory(samples[name][0].parent, name)
 
 
+@app.get("/sample/<name>/preview")
+def walkthrough_sample_preview(name):
+    """A playable WebM of a video sample. The sample itself is FFV1 AVI,
+    which no browser decodes, so the cover preview would stay blank. The
+    encode is cached in the workspace and redone only if the sample changes."""
+    samples = walkthrough_samples()
+    if name not in samples or samples[name][2] != "video":
+        abort(404)
+    source = samples[name][0]
+    preview = WORKSPACE / f"{source.stem}_preview{video_helpers.PREVIEW_SUFFIX}"
+    if not preview.is_file() or preview.stat().st_mtime < source.stat().st_mtime:
+        if make_video_preview(source) is None:
+            abort(500)
+    return send_from_directory(WORKSPACE, preview.name)
+
+
 @app.post("/api/capacity")
 def walkthrough_capacity():
     cover = None
