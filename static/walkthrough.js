@@ -1,7 +1,7 @@
 'use strict';
 const $=id=>document.getElementById(id),names=['Cover','Payload','Protect','Transfer','Receive','Verdict'];
 let activeStage=1;
-let stage=1,kind='image',mode='text',selectedSample='',samples=[],run=null,previewURL=null,attempt=0;
+let stage=1,kind='image',mode='text',selectedSample='',samples=[],run=null,previewURL=null,attempt=0,describeToken=0;
 const historyKey='steg-analysis-runs-v2';
 let runs=[];
 try{const saved=JSON.parse(sessionStorage.getItem(historyKey)||'[]');if(Array.isArray(saved))runs=saved.filter(r=>r&&typeof r.id==='string'&&typeof r.cover==='string'&&r.cover.startsWith('/media/')&&typeof r.output==='string'&&r.output.startsWith('/media/'));}catch{}
@@ -35,7 +35,17 @@ function coverForm(){const data=new FormData(),file=$('cover-file').files[0];if(
 function imageOrAudio(url,type,caption){const figure=document.createElement('figure'),tag=type==='audio'?'audio':type==='video'?'video':'img',element=document.createElement(tag);element.src=url;element.className='art';if(type==='audio'||type==='video')element.controls=true;else element.alt=caption;const label=document.createElement('figcaption');label.textContent=caption;figure.append(element,label);return figure}
 function kindOfName(name){const n=name.toLowerCase();if(n.endsWith('.wav'))return'audio';if(/\.(avi|mp4|mov|mkv)$/.test(n))return'video';return'image'}
 function renderCovers(){const visible=samples.filter(s=>s.kind===kind);if(!visible.some(s=>s.name===selectedSample))selectedSample=(visible.find(s=>s.default)||visible[0])?.name||'';$('covers').replaceChildren();for(const sample of visible){const button=document.createElement('button');button.className='cover-card'+(sample.name===selectedSample&&!$('cover-file').files[0]?' selected':'');button.setAttribute('aria-pressed',sample.name===selectedSample&&!$('cover-file').files[0]?'true':'false');if(kind==='image'){const img=document.createElement('img');img.src='/sample/'+encodeURIComponent(sample.name);img.alt=sample.name;img.className='art';button.append(img)}else{const art=document.createElement('div');art.className='art';art.style.cssText='display:grid;place-items:center;color:#126855;font-weight:700';art.textContent=sample.label+' / '+(kind==='video'?'AVI':'WAV');button.append(art)}const cap=document.createElement('span');cap.className='caption';const title=document.createElement('strong'),detail=document.createElement('small');title.textContent=sample.label||sample.name;detail.textContent=sample.description;cap.append(title,detail);button.append(cap);button.onclick=()=>{selectedSample=sample.name;$('cover-file').value='';renderCovers();renderPreview()};$('covers').append(button)}updateSummary()}
-function renderPreview(){if(previewURL){URL.revokeObjectURL(previewURL);previewURL=null}const file=$('cover-file').files[0];const name=file?.name||selectedSample;if(!name)return;kind=kindOfName(name);const url=file?(previewURL=URL.createObjectURL(file)):'/sample/'+encodeURIComponent(name)+(kind==='video'?'/preview':'');$('local-preview').replaceChildren(imageOrAudio(url,kind,name));$('cover-detail').textContent=file?file.size.toLocaleString()+' bytes':samples.find(s=>s.name===name)?.description||'';invalidateCapacity();updateSummary()}
+function renderPreview(){if(previewURL){URL.revokeObjectURL(previewURL);previewURL=null}const file=$('cover-file').files[0];const name=file?.name||selectedSample;if(!name)return;kind=kindOfName(name);const url=file?(previewURL=URL.createObjectURL(file)):'/sample/'+encodeURIComponent(name)+(kind==='video'?'/preview':'');$('local-preview').replaceChildren(imageOrAudio(url,kind,name));describeCover(file,name);invalidateCapacity();updateSummary()}
+/* A built-in sample was decoded by the server at startup, so its carrier count
+   is already known. An uploaded file has only been seen by the browser, which
+   knows its compressed size and nothing else: the dimensions, and therefore the
+   carrier count, need the server to decode it first. Show the size at once and
+   fill the rest in when it answers, so both paths end up reporting the same
+   measure rather than bytes on disk in one case and carrier values in the other. */
+async function describeCover(file,name){const detail=$('cover-detail');if(!file){detail.textContent=samples.find(s=>s.name===name)?.description||'';return}
+const size=file.size.toLocaleString()+' bytes on disk';detail.textContent=size+' / reading dimensions...';const token=++describeToken;const data=new FormData();data.set('file',file);
+try{const response=await fetch('/api/capacity',{method:'POST',body:data});const d=await response.json();if(token!==describeToken)return;detail.textContent=d.description?size+' / '+d.description:size}
+catch{if(token===describeToken)detail.textContent=size}}
 function updateSummary(){$('sum-cover').textContent=$('cover-file').files[0]?.name||selectedSample;$('sum-payload').textContent=mode==='file'?$('payload-file').files[0]?.name||'Choose a file':inputBytes()+' B text';$('sum-depth').textContent=$('depth').value+' LSB';$('depth-label').textContent=$('depth').value}
 let capacityRequest=0,capacityTimer=null,capacityReady=false,lastCapacity=null;
 function invalidateCapacity(){
