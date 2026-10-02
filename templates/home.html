@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>STEG / Choose your role</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='walkthrough.css', v='wizard12') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='flows.css', v='flows3') }}">
+</head>
+<body class="page-flow">
+<header>
+<div class="brand">STEG<span>.</span> <span class="muted brand-sub">DEMONSTRATION STUDIO</span></div>
+</header>
+<main class="home">
+<div class="home-intro">
+<div class="eyebrow">INF2005 / ACW1</div>
+<h1>Who are you right now?</h1>
+<p class="muted">Pick your role. Each path shows only the screens you need.</p>
+</div>
+<div class="roles">
+<section class="role role-sender" aria-labelledby="sender-title">
+<div class="role-head">
+<div class="eyebrow">Path 1</div>
+<h2 id="sender-title">I am the Sender</h2>
+<p>Protect a file and send it.</p>
+</div>
+<div class="role-body">
+<p>Choose a cover, hide a secret in it, then send the stego file by download or email.</p>
+<a class="role-go" href="{{ url_for('walkthrough_page', role='sender') }}">Start as Sender</a>
+</div>
+</section>
+<section class="role role-receiver" aria-labelledby="receiver-title">
+<div class="role-head">
+<div class="eyebrow">Path 2</div>
+<h2 id="receiver-title">I am the Receiver</h2>
+<p>Check a file that was sent to me.</p>
+</div>
+<div class="role-body">
+<p>Upload the file you were sent and the sender's public key, then read the verdict.</p>
+<a class="role-go" href="{{ url_for('receiver_page') }}">Start as Receiver</a>
+</div>
+</section>
+</div>
+</main>
+</body>
+</html>

@@ -5,11 +5,13 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>STEG / Demonstration studio</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='walkthrough.css', v='wizard12') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='flows.css', v='flows3') }}">
 </head>
 <body>
 <header>
 <div class="brand">STEG<span>.</span> <span class="muted" style="font-size:11px;letter-spacing:1px;font-weight:400">DEMONSTRATION STUDIO</span>
 </div>
+<a class="secondary" href="{{ url_for('home_page') }}">Home</a>
 </header>
 <main>
 <noscript>
@@ -187,8 +189,8 @@
 <div class="stage-head">
 <span class="number">04</span>
 <div>
-<div class="eyebrow">Session</div>
-<h2>Transfer</h2>
+<div class="eyebrow">Party A / Sender</div>
+<h2>Send to the receiver</h2>
 </div>
 </div>
 <div class="handoff">
@@ -207,12 +209,24 @@
 <small>Receiver</small>
 </div>
 </div>
-<details>
-<summary>External transfer</summary>
-<p>Separate Party A-to-B email demonstration required.</p>
-<a class="secondary" id="download" download>Download stego file</a>
-</details>
+<ol class="send-steps">
+<li>
+<strong>Download the stego file</strong>
+<a class="send-download" id="download" download>Download stego file</a>
+</li>
+<li>
+<strong>Open a draft in your mail app</strong>
+<div class="send-mail">
+<button type="button" class="secondary" data-mail="gmail">Open Gmail</button>
+<button type="button" class="secondary" data-mail="outlook">Open Outlook</button>
+</div>
+</li>
+<li>
+<strong>Attach the downloaded file and press Send</strong>
+</li>
+</ol>
 <div class="action">
+<a class="secondary sender-only" href="{{ url_for('home_page') }}">Back to start</a>
 <button class="primary" id="to-receive">Receive →</button>
 </div>
 </section>
@@ -334,5 +348,6 @@
 <script src="{{ url_for('static', filename='monitor.js', v='monitor4') }}" defer></script>
 <script src="{{ url_for('static', filename='walkthrough.js', v='wizard13') }}" defer>
 </script>
+<script src="{{ url_for('static', filename='send.js', v='flows2') }}" defer></script>
 </body>
 </html>

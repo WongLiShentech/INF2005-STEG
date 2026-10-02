@@ -1,0 +1,68 @@
+/* Role picker, receiver page and the sender's "send" step.
+   Loaded after walkthrough.css and reuses its palette: --green, --ink,
+   --muted, --line, --paper. */
+
+:root{--rust:#8f4a16}
+.brand-sub{font-size:11px;letter-spacing:1px;font-weight:400}
+
+/* walkthrough.css turns the page into a fixed-height, no-scroll shell on desktop
+   screens. That suits the wizard; these two pages are ordinary documents and
+   a long verdict has to be able to scroll. */
+body.page-flow{display:block;height:auto;overflow:auto}
+body.page-flow main{display:block;flex:none;padding:42px 30px 80px}
+body.page-flow .hero{margin-bottom:24px}
+body.page-flow .stage{height:auto;overflow:visible;padding:28px}
+body.page-flow .stage>.action{position:static}
+
+/* Role picker */
+.home{max-width:960px}
+.home-intro{text-align:center;margin:18px 0 38px}
+.home-intro h1{font-size:clamp(30px,5vw,44px);margin:6px 0 10px}
+.home-intro p{margin:0;font-size:16px}
+.roles{display:grid;grid-template-columns:1fr 1fr;gap:26px}
+.role{display:flex;flex-direction:column;background:#fff;border:2px solid var(--green);border-radius:18px;overflow:hidden}
+.role-head{background:var(--green);color:#fff;padding:26px 28px}
+.role-head .eyebrow{color:#cfe7de}
+.role-head h2{margin:6px 0 4px;font-size:30px;line-height:1.15}
+.role-head p{margin:0;font-size:16px}
+.role-body{display:flex;flex:1;flex-direction:column;justify-content:space-between;gap:22px;padding:24px 28px 28px}
+.role-body p{margin:0}
+.role-go{display:block;text-align:center;text-decoration:none;color:#fff;background:var(--green);border-radius:10px;padding:15px 20px;font-weight:700;font-size:16px}
+.role-go:hover{filter:brightness(1.1)}
+.role-go:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
+.role-receiver{border-color:var(--rust)}
+.role-receiver .role-head,.role-receiver .role-go{background:var(--rust)}
+.role-receiver .role-head .eyebrow{color:#f3d9c4}
+
+/* Receiver page */
+.receiver{max-width:780px}
+.receiver label.field input{display:block;width:100%;margin-top:6px;padding:10px 12px;background:#fff;border:1px solid var(--line);border-radius:6px;font-weight:400}
+.receiver .note{font-size:12px;margin:0 0 14px}
+#check .action{justify-content:flex-end}
+.advanced{margin:4px 0 8px;font-size:13px}
+.advanced summary{cursor:pointer;color:var(--muted)}
+.advanced label.field{margin-top:12px}
+.payload img,.payload video{display:block;max-width:100%}
+header .secondary{margin-left:16px}
+
+/* Sender: the "send to the receiver" step */
+.send-steps{list-style:none;counter-reset:send;display:grid;gap:24px;margin:24px 0 0;padding:0}
+.send-steps>li{counter-increment:send;display:grid;gap:10px}
+.send-steps>li>strong::before{content:counter(send) ". ";color:var(--green)}
+.send-download{display:block;text-align:center;text-decoration:none;color:var(--green);background:#fff;border:2px solid var(--green);border-radius:10px;padding:14px 18px;font-weight:700}
+.send-download:hover{background:#eef6f1}
+.send-mail{display:flex;flex-wrap:wrap;gap:10px}
+.send-mail button{padding:11px 18px;font-weight:600}
+
+/* The role is chosen on the home page: a sender never sees the receiver's screens. */
+.sender-only{display:none}
+.role-sender .sender-only{display:inline-block}
+.role-sender #to-receive{display:none}
+.role-sender .progress{grid-template-columns:repeat(4,1fr)}
+.role-sender .progress button:nth-child(n+5){display:none}
+.role-sender .progress button:nth-child(4):after{content:none}
+
+@media(max-width:700px){
+  .roles{grid-template-columns:1fr}
+  .home-intro{margin-bottom:26px}
+}

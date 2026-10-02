@@ -143,9 +143,18 @@ def make_video_preview(path):
 
 
 @app.get("/")
+def home_page():
+    return render_template("home.html")
+
+
 @app.get("/walkthrough")
 def walkthrough_page():
     return render_template("walkthrough.html")
+
+
+@app.get("/receiver")
+def receiver_page():
+    return render_template("receiver.html")
 
 
 @app.get("/protect")
@@ -627,6 +636,46 @@ def walkthrough_verify():
     finally:
         if tampered is not None:
             tampered.unlink(missing_ok=True)
+
+
+@app.post("/api/receive")
+def receive():
+    """Verify a file the receiver uploaded against a public key they uploaded.
+
+    There is no key picker and no fallback to the demo key. A verifier checks a
+    signature against the key they were given, so a missing key is an error
+    rather than something to default quietly: a default would let a wrong key
+    look like a right one.
+    """
+    try:
+        _, path = store_upload("file")
+        key = derivation_key()
+        key_upload = request.files.get("public_key")
+        if key_upload is None or not key_upload.filename:
+            raise InputError("upload the sender's public key (.pem)")
+        try:
+            public_key, _, fingerprint = public_key_from_form()
+        except ValueError:
+            raise InputError("that file is not a PEM public key")
+
+        result = workflow.verify(path, key, public_key, chosen_offset())
+        response = {
+            "verdict": result.verdict, "explanation": result.explanation,
+            "checks": result.checks, "record": result.payload,
+            "key": secure_filename(key_upload.filename),
+            "public_fingerprint": fingerprint, "message_bytes": len(result.message),
+            "payload_url": None, "payload_type": None, "message_text": None,
+        }
+        if result.verdict == workflow.AUTHENTIC and result.message:
+            presented = present_message(result)
+            _kind, mimetype = sniff_payload(result.message)
+            response.update(
+                payload_url=presented["message_url"], payload_type=mimetype,
+                message_text=presented.get("message_text"),
+            )
+        return jsonify(response)
+    except (InputError, workflow.UnsupportedMedia, OSError, ValueError) as exc:
+        return jsonify(error=str(exc)), 400
 
 
 if __name__ == "__main__":

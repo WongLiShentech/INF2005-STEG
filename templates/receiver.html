@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>STEG / Receiver</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='walkthrough.css', v='wizard12') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='flows.css', v='flows3') }}">
+</head>
+<body class="page-flow">
+<header>
+<div class="brand">STEG<span>.</span> <span class="muted brand-sub">DEMONSTRATION STUDIO</span></div>
+<a class="secondary" href="{{ url_for('home_page') }}">Home</a>
+</header>
+<main class="receiver">
+<noscript>
+<p>This page requires JavaScript. Use the classic Verify page for a regular form submission.</p>
+</noscript>
+<div class="hero">
+<div>
+<div class="eyebrow">Party B / Receiver</div>
+<h1>Check a file that was sent to you</h1>
+</div>
+</div>
+
+<section class="stage" id="check">
+<div class="stage-head">
+<span class="number">01</span>
+<div>
+<div class="eyebrow">Party B / Receiver</div>
+<h2>Load and verify</h2>
+</div>
+</div>
+<form id="receive-form">
+<div class="fields">
+<label class="field">Stego file you received
+<input id="stego-file" name="file" type="file" required accept=".png,.bmp,.jpg,.jpeg,.wav,.avi,.mp4,.mov,.mkv">
+</label>
+<label class="field">Sender's public key (.pem)
+<input id="public-key" name="public_key" type="file" required accept=".pem">
+</label>
+</div>
+<label class="field">Passphrase
+<input id="passphrase" name="key" type="password" autocomplete="off" required placeholder="Shared with you separately">
+</label>
+<p class="muted note">The passphrase finds the hidden data and decrypts the message. The public key only checks who signed it.</p>
+<details class="advanced">
+<summary>Advanced: start position override</summary>
+<label class="field">Start position (whole number)
+<input id="offset" name="offset" type="number" inputmode="numeric" min="0" step="1" placeholder="Leave blank unless the sender chose one by hand">
+</label>
+</details>
+<p id="receive-error" class="error" role="alert"></p>
+<div class="action">
+<button class="primary" id="verify" type="submit">Verify</button>
+</div>
+</form>
+</section>
+
+<section class="stage" id="result" hidden aria-live="polite">
+<div class="stage-head">
+<span class="number">02</span>
+<div>
+<div class="eyebrow">Verdict / Actual result</div>
+<h2>Verification result</h2>
+</div>
+</div>
+<div id="verdict" class="verdict"></div>
+<h3>Checks</h3>
+<ol class="trail" id="trail"></ol>
+<div id="recovered" hidden>
+<h3>Recovered message</h3>
+<div id="payload" class="payload"></div>
+</div>
+<details id="record-box" hidden>
+<summary>Verified record / key fingerprint</summary>
+<pre id="record" class="hash"></pre>
+</details>
+<div class="action">
+<button class="secondary" id="again" type="button">Verify another file</button>
+<a class="secondary" href="{{ url_for('home_page') }}">Start over</a>
+</div>
+</section>
+</main>
+<script src="{{ url_for('static', filename='receiver.js', v='flows1') }}" defer></script>
+</body>
+</html>

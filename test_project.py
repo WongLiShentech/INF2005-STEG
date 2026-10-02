@@ -1606,9 +1606,15 @@ def test_walkthrough_sample_options_and_capacity(walkthrough_client):
 
 def test_walkthrough_home_and_original_pages(walkthrough_client):
     web = walkthrough_client
-    assert b"walkthrough.js" in web.get("/").data
+    home = web.get("/").get_data(as_text=True)
+    assert "I am the Sender" in home and "I am the Receiver" in home
+    assert "/walkthrough?role=sender" in home and "/receiver" in home
     assert b"walkthrough.js" in web.get("/walkthrough").data
-    for route in ("/protect", "/verify", "/attack", "/static/walkthrough.css", "/static/walkthrough.js"):
+    for route in (
+        "/receiver", "/protect", "/verify", "/attack",
+        "/static/walkthrough.css", "/static/walkthrough.js",
+        "/static/flows.css", "/static/send.js", "/static/receiver.js",
+    ):
         assert web.get(route).status_code == 200
     limit = application.app.config["MAX_CONTENT_LENGTH"]
     try:
@@ -1618,6 +1624,106 @@ def test_walkthrough_home_and_original_pages(walkthrough_client):
         assert result.is_json
     finally:
         application.app.config["MAX_CONTENT_LENGTH"] = limit
+
+
+@pytest.mark.parametrize("route", ["/walkthrough", "/receiver", "/protect", "/verify", "/attack"])
+def test_every_page_links_back_to_the_start_screen(walkthrough_client, route):
+    """Wherever someone is, one click returns them to the role picker."""
+    page = walkthrough_client.get(route).get_data(as_text=True)
+
+    assert 'href="/"' in page
+
+
+@pytest.fixture
+def received_file(walkthrough_client, tmp_path):
+    """A protected image, and the key pair that signed it."""
+    signer = security.generate_keypair()
+    cover = tmp_path / "cover.png"
+    pixels = np.random.default_rng(3).integers(0, 256, size=(150, 200, 3), dtype=np.uint8)
+    Image.fromarray(pixels, "RGB").save(cover)
+    stego = tmp_path / "stego.png"
+    workflow.protect(cover, stego, b"hello receiver", "note.txt", KEY, 2, signer)
+    return walkthrough_client, stego.read_bytes(), signer
+
+
+def receive(web, stego, key_pem, passphrase=KEY.decode(), **extra):
+    data = {"file": (io.BytesIO(stego), "stego.png"), "key": passphrase, **extra}
+    if key_pem is not None:
+        data["public_key"] = (io.BytesIO(key_pem), "sender_public.pem")
+    return web.post("/api/receive", data=data, content_type="multipart/form-data")
+
+
+def test_receiver_accepts_an_uploaded_file_and_public_key(received_file):
+    web, stego, signer = received_file
+
+    response = receive(web, stego, security.public_key_pem(signer))
+    body = response.get_json()
+
+    assert response.status_code == 200
+    assert body["verdict"] == workflow.AUTHENTIC
+    assert body["message_text"] == "hello receiver"
+    assert body["key"] == "sender_public.pem"
+    assert body["record"] is not None
+
+
+def test_receiver_rejects_a_genuine_file_under_a_different_public_key(received_file):
+    web, stego, _ = received_file
+    stranger = security.generate_keypair()
+
+    body = receive(web, stego, security.public_key_pem(stranger)).get_json()
+
+    assert body["verdict"] == workflow.SIGNATURE_INVALID
+    assert body["record"] is None and body["payload_url"] is None
+
+
+def test_receiver_wrong_passphrase_does_not_reveal_a_location(received_file):
+    web, stego, signer = received_file
+
+    body = receive(web, stego, security.public_key_pem(signer), passphrase="not it").get_json()
+
+    assert body["verdict"] == workflow.WRONG_START_LOCATION
+    assert not any(ch.isdigit() for ch in body["explanation"])
+
+
+def test_receiver_never_falls_back_to_the_demo_key(received_file):
+    web, stego, _ = received_file
+
+    response = receive(web, stego, None)
+
+    assert response.status_code == 400
+    assert "public key" in response.get_json()["error"]
+
+
+@pytest.mark.parametrize("make_pem", [
+    lambda signer: b"this is not a key",
+    lambda signer: security.private_key_pem(signer),
+])
+def test_receiver_rejects_anything_that_is_not_a_public_key(received_file, make_pem):
+    web, stego, signer = received_file
+
+    response = receive(web, stego, make_pem(signer))
+
+    assert response.status_code == 400
+    assert "not a PEM public key" in response.get_json()["error"]
+
+
+def test_receiver_requires_a_passphrase(received_file):
+    web, stego, signer = received_file
+
+    response = receive(web, stego, security.public_key_pem(signer), passphrase="")
+
+    assert response.status_code == 400
+    assert "required" in response.get_json()["error"]
+
+
+def test_the_mail_draft_never_reads_the_passphrase():
+    """The draft goes out with the file. The passphrase has to travel another
+    way, or one email would carry both halves of the secret."""
+    import pathlib
+
+    script = (pathlib.Path(__file__).parent / "static" / "send.js").read_text(encoding="utf-8")
+
+    assert "sender-pass" not in script and "receiver-pass" not in script
 
 
 # --- steganalysis ---
