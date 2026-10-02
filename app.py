@@ -10,7 +10,6 @@ from pathlib import Path
 from flask import Flask, abort, jsonify, render_template, request, send_from_directory, url_for
 from werkzeug.utils import secure_filename
 
-import attacks
 import make_demo_files
 import security
 import steganalysis
@@ -357,36 +356,6 @@ def present_message(result):
     return context
 
 
-@app.get("/attack")
-def attack_page():
-    return render_template("attack.html", attacks=attacks.ATTACKS, keys=available_public_keys())
-
-
-@app.post("/attack")
-def attack():
-    context = {"attacks": attacks.ATTACKS, "keys": available_public_keys()}
-    try:
-        stored, path = store_upload("file")
-        _, target = store_upload("target", required=False)
-        public_key, key_name, fingerprint = public_key_from_form()
-
-        outcomes = attacks.run_all(
-            path, derivation_key(), public_key, WORKSPACE, target, chosen_offset()
-        )
-        context.update(
-            outcomes=outcomes,
-            stego_url=url_for("media", filename=stored),
-            kind=workflow.media_kind(path),
-            key_name=key_name,
-            key_fingerprint=fingerprint,
-            ran=sum(1 for o in outcomes if o.ran),
-            matched=sum(1 for o in outcomes if o.as_expected),
-        )
-    except (InputError, workflow.UnsupportedMedia, OSError, ValueError) as exc:
-        context["error"] = str(exc)
-    return render_template("attack.html", **context)
-
-
 @app.errorhandler(413)
 def too_large(_):
     if request.path.startswith("/api/"):
@@ -612,7 +581,7 @@ def walkthrough_verify():
             path = run["cover"]
         elif scenario == "tampered":
             tampered = WORKSPACE / f"{uuid.uuid4().hex}_tampered{path.suffix}"
-            attacks.save_bit_flipped_copy(path, tampered, run["depth"])
+            make_demo_files.save_bit_flipped_copy(path, tampered, run["depth"])
             path = tampered
         elif scenario != "intact":
             raise InputError("choose a supported test scenario")

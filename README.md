@@ -1,535 +1,117 @@
-# INF2005 ACW1 — Steganographic Image and Audio Integrity Verification
+# INF2005 ACW1: Steganographic Integrity Verification
 
-A web-based tool that hides a signed verification payload inside a PNG or WAV file
-using LSB replacement, then later checks whether the file is authentic.
+A web tool that hides a signed record inside an image, a sound file or a video, and later checks whether the file is genuine. It uses LSB replacement to hide the data, SHA-256 to fingerprint the file and RSA-2048 to sign it.
 
 ## Setup
 
-You need Python 3.11 or newer. Nothing else — no AI tooling is required to build,
-run, test or change anything in this repository.
+Needs Python 3.11 or newer.
 
-```bash
-git clone <your repo url>
+```
+git clone https://github.com/WongLiShentech/INF2005-STEG.git
 cd INF2005-STEG
-
 python -m venv .venv
-.venv\Scripts\activate          # Windows
-source .venv/bin/activate       # macOS / Linux
-
+.venv\Scripts\activate        (macOS/Linux: source .venv/bin/activate)
 pip install -r requirements.txt
 ```
-
-The demo keypair is already committed in `keys/`, so there is nothing else to set up.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `flask --app app run` | Starts the web interface at http://127.0.0.1:5000 |
-| `pytest` | Runs the test suite. Everything should pass before you commit. |
-| `python make_demo_files.py` | Rebuilds every sample in `testFiles/` and writes `evidence/demo_run_log.txt`. |
-| `python generate_key.py` | Creates a fresh demo keypair. Only needed if you delete `keys/`. |
+| `python -m flask --app app run` | Starts the app at http://127.0.0.1:5000 |
+| `pytest` | Runs the tests |
+| `python make_demo_files.py` | Rebuilds `testFiles/` and `evidence/demo_run_log.txt` |
+| `python generate_key.py` | Makes a new demo key pair (only if `keys/` is deleted) |
 
-Run `make_demo_files.py` after any change to the payload format, the key
-derivation or the demo messages, or the committed samples will no longer match
-the code that reads them.
+Python files are only read when the server starts, so restart it after pulling changes to any `.py` file.
 
-## Project layout
+## Using it
 
-```
-app.py             Flask routes: upload, protect, verify, capacity, serve media
-workflow.py        protect() and verify() end to end, including the verdict tree
-image_helpers.py   PNG load/save, carrier array, capacity, seed string
-audio_helpers.py   WAV/PCM load/save, carrier array, capacity, seed string
-video_helpers.py   Lossless AVI (FFV1) load/save, carrier array, capacity, seed string
-security.py        Payload record, canonical JSON, media hash, RSA sign/verify
-stego_utils.py     Bit conversion, header, keyed offset, LSB embed/extract
-generate_key.py    One-off demo keypair script
-test_project.py    Test suite
-templates/         HTML pages
-static/            CSS and JavaScript
-testFiles/         Demo media: original/, protected/, tampered/
-keys/              Demo RSA keypair
-evidence/          Screenshots and logs for each test case
-workspace/         Scratch space the running server writes to (not committed)
-```
+Open the app and pick a role.
 
-All three media types are reduced to a flat array of integer carrier units —
-image channel values, audio samples, or video frame pixels — so the LSB
-replacement code in `stego_utils.py` is written once and shared.
-`image_helpers.py`, `audio_helpers.py` and `video_helpers.py` differ only in
-how they load and save that array.
+**Sender**
+1. Choose a cover (image, audio or video) and type the secret message.
+2. Set a passphrase and an LSB depth from 1 to 8. Depth 1 or 2 is invisible; higher depths hold more but damage the cover.
+3. Press Protect, then download the stego file or open a Gmail or Outlook draft and attach it.
+4. Give the receiver the passphrase some other way. It is not in the email.
 
-## Design decisions
+**Receiver**
+1. Upload the file you were sent and the sender's public key (a `.pem` file).
+2. Enter the passphrase and press Verify.
+3. Read the verdict and the checks behind it. If the file is genuine, the hidden message is shown.
 
-### 1. What gets hashed
+`/walkthrough` runs the whole journey, sender and receiver, on one page.
 
-Embedding changes the file, so hashing the raw file would make every authentic
-file report as tampered. Instead we hash the **canonical form**: the media with
-the lowest `n` bits of every carrier unit forced to zero. Embedding only ever
-writes into those bits, so the hash is identical before and after.
+## How it works
 
-The cost, which we state openly: changes confined to the lowest `n` bits outside
-the payload region are not detected by the hash. That is the price of making the
-hash stable under embedding.
+1. The cover is hashed with its lowest `n` bits set to zero. Hiding only changes those bits, so the hash is the same before and after.
+2. A short record is built: media ID, timestamp, nonce, the cover hash, the message hash and the depth. It is signed with RSA-2048 (PSS padding).
+3. HKDF turns the passphrase into two keys. One decides where to hide; the other encrypts the message with AES-256-GCM.
+4. The start position is an HMAC of the location key and the cover's dimensions, reduced to the first half of the file. It is calculated, never stored.
+5. A 13-byte header, the record, the signature and the message are written into the lowest `n` bits from that position.
+6. Verifying repeats the calculation, reads the data back, checks the signature and compares the hashes.
 
-### 2. Framing
+| Verdict | Meaning |
+|---|---|
+| Authentic | Signature valid, media and message unchanged |
+| Tampered | Signature valid, but the media or message no longer matches it |
+| Signature Invalid | The record was altered, or a different key signed it |
+| Payload Missing | Nothing hidden in this file |
+| Wrong Start Location | A payload exists, but not where this passphrase points |
+| Cannot Verify | The file could not be read as image, audio or video |
 
-A 13-byte length-prefixed header, not a delimiter. The hidden data contains a
-binary RSA signature in which any byte sequence can occur, including whatever
-sentinel we might have chosen — a delimiter would truncate extraction
-unpredictably. A length prefix also makes extraction bounded, so a file with no
-payload reports `Payload Missing` instead of scanning forever.
-
-| Field | Bytes | Purpose |
-|---|---|---|
-| magic | 4 | `ACW1`. Confirms a payload exists and the start location is right |
-| version | 1 | Lets the decoder reject formats it does not know |
-| lsb_n | 1 | Body depth, cross-checked against the signed copy |
-| flags | 1 | Bit 0: message is encrypted |
-| payload_len | 4 | Length of the JSON payload |
-| sig_len | 2 | Length of the signature |
-
-The header is always written at 1 LSB so the decoder can read it without already
-knowing the body depth. The body follows immediately at `n` LSBs.
-
-### 3. Start location
-
-The offset may be chosen outright or, by default, derived. A chosen offset can
-reach anywhere in the carrier; a derived one lands in the first half. Either
-way it is never written into the file — the verifier has to know where to look
-before it can read anything, so a chosen offset travels out of band alongside
-the passphrase, and deriving it means nothing extra has to travel at all.
-
-Deriving is the stronger option and is what the samples use. A number a person
-picks by hand tends to be round and near the start, which is where anyone
-searching would look first.
-
-The derivation:
+## Files
 
 ```
-location_key, message_key = HKDF-SHA256(passphrase)
-offset = HMAC-SHA256(location_key, seed) mod (usable_units // 2)
+app.py            web routes
+workflow.py       protect() and verify(), including the verdict logic
+security.py       record, hashing, RSA signing, AES-GCM
+stego_utils.py    header, key derivation, LSB embed and extract
+image_helpers.py, audio_helpers.py, video_helpers.py
+                  load and save each media type as a flat list of numbers
+make_demo_files.py  builds the sample files
+generate_key.py   makes the demo key pair
+test_project.py   tests
+templates/ static/  pages, styles and scripts
+testFiles/        original, protected and tampered samples
+keys/             demo key pair
+evidence/         log of the demo run
 ```
-
-The user types one passphrase, but placing the payload and encrypting the
-message are unrelated jobs, and tying both to the same bytes would mean
-anything that weakened one weakened the other. HKDF expands the passphrase into
-two independent 32-byte subkeys with a distinct info string each, so recovering
-one tells an attacker nothing about the other.
-
-The seed is read from the container before any extraction — `width x height x
-channels` for images, `frames x channels x sample_width` for audio. It is
-deliberately **not** the filename, because one of our test cases emails the file
-to another party and downloads are frequently renamed.
-
-The modulus is a constant fraction of the carrier and never a function of payload
-length. The verifier has to derive the same offset *before* it has found the
-header, so it cannot know how long the payload is. Confining the offset to the
-first half also guarantees room for a body.
-
-Nothing about the location travels with the file, so security rests on the key
-alone.
-
-### 4. Signature
-
-RSA-2048 with PSS padding and SHA-256, over the canonical JSON of the payload.
-Signing the payload — which itself contains the media hash — chains media
-integrity to signer authenticity in one step.
-
-Canonical JSON means `sort_keys=True, separators=(',', ':')`, written once in
-`security.py` and never inlined anywhere else. Python's default `json.dumps`
-produces different bytes for the same object depending on key order, which would
-fail verification on files that are perfectly authentic.
-
-### 5. Message confidentiality
-
-Steganography hides that a message exists. It does not protect the message once
-found: without a cipher, anyone who learns the start location reads the text
-straight out of the carrier. Concealment is not confidentiality, so encryption
-is offered per message and recorded in both the header flag and the signed
-record.
-
-AES-256-GCM, keyed by the message subkey, with a random 12-byte nonce per
-message. GCM is authenticated encryption, so a modified ciphertext fails to open
-rather than decrypting to garbage.
-
-`msg_sha256` covers the bytes **as stored** — ciphertext when encrypted. That is
-deliberate twice over. The verifier can confirm the extracted bytes are intact
-before it tries to decrypt them, and no plaintext fingerprint travels in a
-record that is readable in the clear: digesting the plaintext of a short,
-guessable message would let it be recovered by hashing candidates until one
-matched, undoing the encryption. Plaintext integrity is not lost, because GCM's
-tag covers it and the tag sits inside the ciphertext the digest commits to.
-
-### 6. Payload
-
-```json
-{
-  "v": 1,
-  "media_id": "P1-4-IMG-3F9A2B10",
-  "media_type": "image/png",
-  "timestamp": "2026-09-10T14:30:00Z",
-  "hash": "<sha256 of the masked canonical form>",
-  "nonce": "<16 random bytes, base64>",
-  "lsb_n": 2,
-  "team": "P1-4",
-  "issuer": "INF2005 ACW1 Media Verification",
-  "msg_len": 812,
-  "msg_sha256": "<sha256 of the hidden message>",
-  "msg_name": "overview.txt",
-  "msg_encrypted": false
-}
-```
-
-The hidden message is written **after** the signature, not inside this JSON. Base64
-would inflate a large message by a third for no benefit. Its length and digest are
-in the signed record, so the signature still covers the message and an attacker
-cannot lie about its length — which would be possible if the length lived in the
-plaintext header.
-
-The nonce makes two protections of the same file produce different signed
-payloads, so one cannot be lifted and replayed. Note that this gives uniqueness,
-not prevention: detecting an actual replay needs a verifier that remembers the
-nonces it has already seen.
-
-To change the team label, edit `TEAM` at the top of `security.py`. Do it before
-generating the demo sample files, since the value is signed into each one.
-
-### 7. Serving an extracted payload
-
-The interface displays an extracted image and plays extracted audio, rather
-than only reporting that a payload was found.
-
-The content type is decided by reading the payload's own leading bytes, never
-its name. `msg_name` travels inside the payload, so it is chosen by whoever
-protected the file: letting it pick a content type would allow a hidden
-`note.html` containing script to be served back as markup and run in the
-verifying browser. Anything not positively identified is sent as a generic
-attachment, so an extracted file is never interpreted by the browser checking
-it.
-
-### 8. Steganalysis
-
-Audio hides a payload too well to hear. A six-second cover carrying a
-700-byte payload has under one per cent of its samples altered, each by a few
-parts in 65,536, and the result is indistinguishable by ear at any embedding
-depth. Playing the two files side by side therefore proves nothing either
-way, so the analysis panel measures the difference instead of asking a
-listener to find it.
-
-Two charts, styled as a patient monitor rather than a report:
-
-- **Waveform** — the signal itself, cover and stego, on one scale. They
-  overlap exactly, which is the finding rather than a missing chart. The
-  trace lights up under a moving head in time with the player above it, so
-  the picture connects to the sound instead of sitting beside it; clicking a
-  trace seeks to that point. A static waveform is hard to relate to what you
-  are hearing, and this is the whole reason the view exists.
-- **Difference** — the largest change per slice, in raw carrier units. Flat
-  everywhere, then a solid block exactly where the payload sits. This needs
-  the original file, so it explains rather than attacks — but it is the
-  direct answer to a difference no one can hear.
-
-**Charts are drawn for audio only.** An image or a video is judged by looking
-at it, and its card shows the cover, the stego object, and three figures: PSNR,
-values changed and largest value change. A difference in sound that nobody can
-hear is the one that needs showing, so only audio runs are measured and
-charted.
-
-Above the waveform and difference charts sits **Sound level**
-(`static/monitor.js`): the original and the stego file side by side, as a wave
-that sits low when the music is soft and rises when it is loud.
-
-It shows a fixed stretch rather than scrolling: an identical lead-in, the
-payload in a dashed box, and an identical tail. Nothing moves but the
-playhead, so a difference can be studied instead of watched go past. On the
-stego chart the original is laid over the top as a dashed white line; outside
-the box the two coincide, and inside it every gap is filled — red where the
-payload made that moment louder, blue where it made it quieter. Pointing at
-either chart marks the same instant on both and prints the exact values, for
-example `original 8,652 → stego 8,654 · louder by 2`.
-
-**Play both** plays the two files together, locked to the same sample, and
-drives only these two charts. The players above are separate: the original's
-player drives the original waveform, and the stego player drives the stego
-waveform and the difference chart.
-
-**Hearing the distortion.** The sample audio is 16-bit, so even depth 8 only
-rewrites the bottom 8 of 16 bits — a change of at most 255 against ±32,768,
-which is a faint hiss at worst. To hear it properly, use 8-bit audio, where
-there are only 256 levels and depth 8 rewrites the whole sample. Measured on
-the same song with the same payload:
-
-| Audio | Depth | Largest change | Noise vs music | Heard as |
-|---|---|---|---|---|
-| 16-bit | 8 | 245 of ±32,768 | 31 dB below | faint hiss |
-| 8-bit | 2 | 3 of ±128 | 19 dB below | clearly audible |
-| 8-bit | 4 | 15 of ±128 | 8 dB below | harsh noise |
-| 8-bit | 8 | 164 of ±128 | 13 dB above | noise louder than the music |
-
-At 8-bit depth 4 the Sound level chart needs no magnification at all.
-
-`steganalysis.py` also computes a low-bit plane and a windowed
-Westfeld-Pfitzmann chi-square scan, which the panel no longer draws. They are
-kept because the measurements behind them are worth reporting.
-
-**The chi-square result would not be honest as a verdict.** Measured across
-depths, payload sizes and cover types, the test both misses real payloads and
-fires on untouched covers: at 1 LSB an untouched image scored 0.77 where the
-protected copy scored 0.92, and on a video whose payload filled 2% of the
-carrier it scored zero on both. It depends on the value histogram having
-local structure for LSB replacement to flatten, and depth, payload size and
-cover content all change how much structure is there. `analyse()` therefore
-scores the original through the same test as a control and reports the two
-side by side rather than a confident answer.
-
-A second finding came out of the same measurements, and it is worth stating
-plainly: **the low bits of our 16-bit audio are already indistinguishable
-from random before anything is hidden in them.** Adjacent-sample LSB
-transition rates are 0.4986 for the cover and 0.5003 for the stego file, and
-the low two bits are uniform to within noise in both. With 65,536 amplitude
-levels, harmonics, decay envelopes and quantisation leave no structure in the
-bottom bits for embedding to disturb. LSB steganalysis works far better on
-8-bit images, where 256 levels and smooth gradients leave the histogram
-highly structured. The payload is present and verifiable; this class of test
-simply cannot see it.
-
-### 9. Attack simulation
-
-`attacks.py` stages eight attacks against a protected file and states the
-verdict each should produce. Six mutate a copy of the file; two are mistakes
-made at verification time. Running them together turns the negative cases from
-a set of hand-made files into something reproducible against any protected
-object, and `make_demo_files.py` runs the whole set as part of generating the
-samples.
-
-The most useful of them is the replay: a genuine, correctly signed payload is
-lifted out of one file and dropped into another. Nothing is forged and the
-signature verifies perfectly. What the record no longer describes is the file
-it now sits in, and only the media hash can tell. It is the clearest argument
-for why the hash is needed at all.
-
-Two attacks are included because they do **not** produce the verdict we would
-want, and the module reports the reason rather than omitting the case:
-
-- **Retouching at 8 LSB goes undetected.** The integrity hash masks the lowest
-  `n` bits, so at `n = 8` it masks every bit of every value and is computed over
-  constant zeros. It cannot see any edit. The payload is still authentic; the
-  media is not, and the system cannot tell.
-- **Replay within one cover succeeds.** Two protections of the same cover share
-  a masked media hash, so a record moved between them still describes the file
-  it lands in. The record binds to media content, not to one instance of it. A
-  per-instance binding would need something the cover itself cannot supply.
-
-### 10. Verdicts
-
-| Step | Check | Verdict on failure |
-|---|---|---|
-| 1 | File opens as PNG/WAV | Cannot Verify |
-| 2 | Magic found at the derived offset | Payload Missing / Wrong Start Location |
-| 3 | Version known, lengths within capacity | Cannot Verify |
-| 4 | Signature valid under the public key | Signature Invalid |
-| 5 | Signed `lsb_n` matches header `lsb_n` | Tampered |
-| 6 | Signed `msg_encrypted` matches the header flag | Tampered |
-| 7 | Extracted message matches `msg_sha256` | Tampered |
-| 8 | Ciphertext opens under the message subkey | Cannot Verify |
-| 9 | Recomputed canonical hash matches | Tampered |
-| 10 | — | Authentic |
-
-Every check is recorded as it runs and returned with the verdict, so the
-interface can show the comparison each step made — both hashes side by side,
-not just the word `Tampered`. The trail stops at the first failure.
-
-Step 4 comes before the JSON is parsed: untrusted input should be authenticated
-before it is interpreted.
-
-Steps 2, 5 and 6 need a word of explanation.
-
-**Payload Missing vs Wrong Start Location.** A missing magic value has two causes:
-the file never carried a payload, or the key was wrong so we are looking in the
-wrong place. We tell them apart with a bounded scan — if the magic turns up
-elsewhere, the payload exists and the derivation was wrong. The scan is capped
-deliberately, because an unbounded one would itself be a steganalysis technique.
-
-**Steps 5 and 6 reconcile the unsigned header.** The header has to be readable
-before anything is authenticated, so it travels unsigned. Both of the fields
-that change how the body is interpreted — the depth and the encryption flag —
-therefore have a signed counterpart, and a mismatch is reported as tampering.
-
-**Step 5 catches re-embedding.** Someone can lift a validly signed payload and
-re-embed it at a different depth with a matching header. The body reads cleanly
-and the signature verifies, but the depth inside the signed record no longer
-matches the header, so it reports Tampered.
-
-**Two independent tamper paths.** Editing bytes *inside* the payload region breaks
-the signature (`Signature Invalid`). Editing the media *outside* it, above the LSB
-planes, leaves the signature perfectly valid and is caught by the hash instead
-(`Tampered`). Different mechanisms, different verdicts.
-
-### 11. Video cover object (optional challenge)
-
-Video is not required by the spec, only permitted as an optional extension.
-The design goal was to add it without writing a second embedding path:
-`video_helpers.py` reads every frame of a clip into one `(frames, height,
-width, 3)` array and flattens it exactly the way `image_helpers.py` flattens
-a single frame's pixel grid. Once flattened, it is indistinguishable from an
-image carrier to everything downstream — `stego_utils.py`, `workflow.py` and
-`security.py` needed no changes at all.
-
-That has a direct consequence for start-location security (FR7). The keyed
-offset derivation was already confined to the first half of the carrier, for
-the same reason it is for images: a payload has to land *somewhere*, and
-which frame(s) it lands in falls straight out of where that offset happens
-to sit inside the flattened array. No separate "pick a frame" step was
-designed or is needed — the existing pixel-level derivation already secures
-a frame-level decision, because a video's carrier is only pixels with one
-more dimension folded in before the flatten.
-
-**Output is always lossless AVI, written with the FFV1 codec.** The same
-"we never write JPEG" rule `image_helpers.py` already enforces for images
-applies here: FFV1 was chosen over MJPEG, raw/uncompressed AVI and HuffYUV
-after a round-trip spike confirmed it is the only one of the four, among the
-codecs available through OpenCV's bundled FFmpeg backend on this machine,
-that returns bit-exact frames — MJPEG and raw AVI both altered pixel values
-on read-back, which would have silently corrupted the low bits the payload
-lives in. Input can be a wider set of containers (MP4, MOV, MKV) than we
-ever write, mirroring how an image cover can be uploaded as JPEG even though
-protected output is always PNG.
-
-**The masked media hash covers every frame**, not only the frame(s) the
-payload happened to land in — `security.masked_hash()` is called on the
-whole flattened carrier, unchanged from the image and audio paths. An edit
-to any frame, whether or not it carries payload bits, is caught by `Tampered`
-the same way an edit anywhere in an image or a waveform already is.
-
-**No browser plays the protected file itself.** FFV1-in-AVI is bit-exact,
-which is what verification needs, but no major browser's `<video>` element
-decodes it — an attempt to switch the codec itself to lossless H.264
-(CRF/QP 0, universally browser-playable) found that OpenCV's bundled
-encoder is unavailable entirely in this environment. The fix keeps the two
-concerns apart instead of compromising either: every protect and verify
-request that touches a video additionally muxes a throwaway VP8/WebM copy
-— lossy, for the `<video>` tags in the interface only — while the download
-link, the signature, the hash and every verdict are always computed from
-the real FFV1 file. The preview is muxed by a real `ffmpeg` binary
-(`imageio-ffmpeg`, pip-installable, no separate download) rather than
-OpenCV's own `VideoWriter`: a check found no structural difference between
-the two for a small test clip, but ffmpeg is the far more battle-tested
-muxer, and this path only has to satisfy a browser, not this tool's own
-round-trip tests, so there was no reason to lean on the less-proven writer
-here. The interface says so next to the player, so what's being watched is
-never mistaken for what was actually checked.
-
-Uncompressed frame data is large, stated openly rather than hidden: a short,
-modest-resolution demo clip (320×240, a few seconds) runs a few megabytes to
-a few tens of megabytes once written losslessly, and the whole clip is held
-in memory as one NumPy array during both protection and verification. This
-is the video equivalent of the existing PNG-not-JPEG and WAV-not-MP3
-trade-off, just more visible: a longer or higher-resolution source video
-needs proportionally more memory and produces a proportionally larger stego
-file. The walkthrough demo's video samples are kept deliberately short and
-small for this reason.
-
-## Interface
-
-Three pages, one job each: **Protect** embeds and signs, **Verify** checks and
-explains, **Attack** stages the failure cases.
-
-The verdict is the loudest thing on the page and everything else is kept quiet
-around it. Beneath it, each check that weighed two values against each other
-prints both, aligned in the same columns and set in a monospaced face, so a
-divergence is visible by eye rather than asserted in prose — a reader can see
-*where* two digests part company, not merely that they do.
-
-Amber carries the interface: focus rings, the active tab, the primary button.
-Green and red are reserved for pass and fail alone, so nothing decorative ever
-competes with the one distinction the tool exists to draw.
 
 ## Keys
 
-`keys/demo_private.pem` is committed on purpose. It was generated only for this
-assignment, is used only to sign demo files, and protects nothing real — the
-specification permits this so the marker can reproduce every result. A real
-deployment would never publish a private key; the signer would hold it and
-distribute only `demo_public.pem`.
-
-## Limitations
-
-- LSB replacement is statistically detectable. Replacement pairs values, so heavy
-  embedding pushes the counts within each pair towards equality, which a
-  chi-square test on parity picks up.
-- Concealment degrades as depth rises. Verification still returns Authentic at
-  `n = 8`; what fails is the hiding, not the security.
-- The integrity hash deliberately excludes the lowest `n` bit planes.
-- Security rests entirely on the derivation key. Steganography adds obscurity,
-  not strength.
-- The signature proves origin, not provenance. It shows a key holder protected
-  this file at this time, not that the recording is a truthful capture of anything.
-- No robustness to processing. Recompression, resampling or format conversion
-  destroys the payload — re-saving a stego PNG as JPEG, or a stego WAV as MP3,
-  loses it entirely.
-- Audio hides less than it appears to. A quiet or near-silent passage has
-  little to mask the altered low bits, so depth that is inaudible in music can
-  be plainly audible in speech with pauses.
-- 24-bit PCM is unsupported: its samples have no native integer width, so they
-  cannot be addressed as whole carrier units without a bespoke packing step.
-- Protected video is written uncompressed (FFV1), so a stego file is
-  routinely several times the size of a normally-encoded source clip, and a
-  long or high-resolution clip loads the entire frame stack into memory at
-  once. Frame count is read by decoding to the end rather than trusted from
-  container metadata, because some containers misreport it.
-- The browser preview of a video (a lossy WebM copy, muxed by ffmpeg because
-  no browser decodes FFV1) is a second encode of every frame on top of the
-  real one, doubling the encoding work per video request, and it is
-  regenerated from scratch each time rather than cached.
-- Encryption protects the message, not the record. The payload JSON — media ID,
-  timestamp, team, issuer — is readable by anyone who finds the start location,
-  because the verifier has to read it before deciding anything.
-- A hand-chosen start location is only as good as the number chosen. The
-  derivation exists because people pick round numbers near the beginning.
-- The derivation key is typed into a web form. On `127.0.0.1` that is fine, but
-  over a network it would need HTTPS.
-- An extracted payload is still untrusted content. We fix its content type
-  ourselves and refuse to serve anything unrecognised inline, but a verified
-  signature only proves who protected the file, not that its payload is safe
-  to open.
-- Comparing the stego object against the original is a convenience, not part of
-  verification. A real verifier rarely holds the original, which is why the
-  verdict is reached from the received file alone.
+`keys/demo_private.pem` is committed on purpose. It was made for this assignment, signs only the demo files and protects nothing real, so anyone can reproduce the results. A real signer would keep it secret and publish only the public key.
 
 ## Sample files
 
-Rebuild all of these with `python make_demo_files.py`. The passphrase is
-`team demo key`.
+Passphrase `team demo key`, public key `keys/demo_public.pem`.
 
-| File | Case |
+| File | Verdict |
 |---|---|
-| `protected/P1_image_short_n2.png` | Image, short message, 2 LSB, plaintext |
-| `protected/P2_audio_large_n4.wav` | Audio, large message, 4 LSB, plaintext |
-| `protected/P3_image_custom_encrypted_n3.png` | Image, custom payload, 3 LSB, encrypted |
-| `protected/P4_audio_custom_encrypted_n2.wav` | Audio, custom payload, 2 LSB, encrypted |
-| `tampered/N1_image_edited.png` | Media edited outside the payload region |
-| `tampered/N6_audio_payload_bits_flipped.wav` | Payload bytes altered |
-| `tampered/N7_not_an_image.png` | Not a media file, renamed |
-| `tampered/N8_audio_replayed_payload.wav` | Genuine payload replayed into another cover |
-| `protected/P5_video_short_n2.avi` | Video (optional cover object), short message, 2 LSB, plaintext |
-| `tampered/N9_video_edited.avi` | Video media edited outside the payload region |
-| `original/small_cover.png` | Too small to hold the large message |
+| `protected/P1_image_short_n2.png` | Authentic |
+| `protected/P2_audio_large_n4.wav` | Authentic |
+| `protected/P3_image_custom_encrypted_n3.png` | Authentic (encrypted message) |
+| `protected/P4_audio_custom_encrypted_n2.wav` | Authentic (encrypted message) |
+| `protected/P5_video_short_n2.avi` | Authentic |
+| `protected/receiver_demo_stego.png` | Authentic |
+| `tampered/receiver_demo_stego_tampered.png` | Tampered |
+| `tampered/N1_image_edited.png` | Tampered (edited outside the payload) |
+| `tampered/N8_audio_replayed_payload.wav` | Tampered (real payload moved to another cover) |
+| `tampered/N9_video_edited.avi` | Tampered |
+| `tampered/N6_audio_payload_bits_flipped.wav` | Signature Invalid |
+| `tampered/N7_not_an_image.png` | Cannot Verify |
+| `original/` covers | Payload Missing |
 
-The remaining negative cases need no file of their own: `other_public.pem`
-against `P2` gives Signature Invalid, the wrong passphrase against `P1` gives
-Wrong Start Location, and either untouched cover gives Payload Missing.
+Other cases need no extra file. `keys/other_public.pem` gives Signature Invalid on any protected file, and a wrong passphrase gives Wrong Start Location.
 
-All six verdict categories are reachable, and `make_demo_files.py` demonstrates
-every one of them.
+## Limits
 
-## Status
-
-Image and audio codecs, key separation, message encryption, the full verdict
-tree and the web interface are complete and covered by the test suite. The
-optional video cover object (FR13/optional challenge) shares the same
-verdict tree, capacity math and start-location derivation unchanged, backed
-by a lossless (FFV1) AVI codec in `video_helpers.py`. Every sample in
-`testFiles/` is regenerated by `make_demo_files.py`, which also writes the
-run log in `evidence/`.
+- LSB replacement can be detected statistically, and at high depths the damage is visible or audible. Verification still passes at depth 8, but the hiding has failed.
+- The `ACW1` marker means anyone who knows the format can find the payload by scanning, without the passphrase. The start position gives obscurity, not secrecy. The encryption is what protects the message.
+- The passphrase goes through HKDF only, with no slow password hashing, so a weak passphrase can be guessed offline.
+- The hash ignores the lowest `n` bits, so edits there are not caught. At depth 8 the hash covers nothing.
+- A signed payload copied into another protection of the same cover still verifies.
+- The receiver must already have the genuine public key. There are no certificates.
+- Both sides need the same passphrase before they start, and it has to travel separately.
+- Re-saving as JPEG or MP3, resizing or resampling destroys the payload.
+- 24-bit audio is not supported. Protected video is stored uncompressed, so the files are large.

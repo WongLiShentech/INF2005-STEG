@@ -9,7 +9,7 @@ Each case below is one of the positive or negative cases in the demo plan. The
 log it prints is the reproducible record of what the marker will see live.
 """
 
-import tempfile
+import json
 import wave
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,8 +17,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-import attacks
 import security
+import stego_utils as su
 import video_helpers
 import workflow
 
@@ -204,6 +204,66 @@ def make_small_cover(path):
     return path
 
 
+def _layout(path, key):
+    """Load a protected file and work out where each part of its payload sits."""
+    media = workflow.load_media(path)
+    offset = workflow.resolve_offset(media, key)
+    header = su.parse_header(su.extract(media.carrier, offset, su.HEADER_SIZE, 1))
+    lsb_n, payload_len, sig_len = header["lsb_n"], header["payload_len"], header["sig_len"]
+    body_at, message_at = workflow.regions(offset, lsb_n, payload_len, sig_len)
+    record = json.loads(su.extract(media.carrier, body_at, payload_len, lsb_n))
+    return media, offset, header, body_at, message_at, record["msg_len"]
+
+
+def edit_media(source, destination, key):
+    """Retouch the picture or sound the way an editor would, leaving the hidden
+    payload alone. The signature stays valid; only the media hash notices."""
+    media, offset, header, _, message_at, msg_len = _layout(source, key)
+    carrier = media.carrier
+    payload_end = message_at + su.units_needed(msg_len, header["lsb_n"])
+    top_bit = carrier.dtype.type(1 << (carrier.dtype.itemsize * 8 - 1))
+    for index in range(0, len(carrier), max(1, len(carrier) // 400)):
+        if not offset <= index < payload_end:
+            carrier[index] ^= top_bit
+    media.save(destination)
+
+
+def corrupt_record(source, destination, key):
+    """Flip one bit inside the signed record, which is what rewriting the claim
+    would involve. The signature no longer matches."""
+    media, _, _, body_at, _, _ = _layout(source, key)
+    media.carrier[body_at + 40] ^= media.carrier.dtype.type(1)
+    media.save(destination)
+
+
+def replay_copy(source, destination, key, target):
+    """Lift a genuine, correctly signed payload out of one file and drop it into
+    another cover. Nothing is forged; only the media hash can tell."""
+    media, offset, header, body_at, _, msg_len = _layout(source, key)
+    lsb_n, payload_len, sig_len = header["lsb_n"], header["payload_len"], header["sig_len"]
+    header_bits = su.extract(media.carrier, offset, su.HEADER_SIZE, 1)
+    body_bits = su.extract(media.carrier, body_at, payload_len + sig_len + msg_len, lsb_n)
+
+    host = workflow.load_media(target)
+    host_offset = workflow.resolve_offset(host, key)
+    if host_offset + workflow.units_required(lsb_n, payload_len, sig_len, msg_len) > len(host.carrier):
+        raise ValueError("the second cover object is too small to hold the payload")
+    host_body_at, _ = workflow.regions(host_offset, lsb_n, payload_len, sig_len)
+    su.embed(host.carrier, host_offset, header_bits, 1)
+    su.embed(host.carrier, host_body_at, body_bits, lsb_n)
+    host.save(destination)
+
+
+def save_bit_flipped_copy(source, destination, depth):
+    """Flip one bit just above the payload's depth, in a copy. The walkthrough
+    uses this for its tampered scenario."""
+    media = workflow.load_media(source)
+    if not 1 <= depth < media.carrier.dtype.itemsize * 8:
+        raise ValueError("no unmasked bits remain; choose a lower depth for this test")
+    media.carrier[0] ^= media.carrier.dtype.type(1 << depth)
+    media.save(destination)
+
+
 def verdict_of(path, key=KEY, public_key_path=PUBLIC):
     return workflow.verify(path, key, security.load_public_key(public_key_path))
 
@@ -288,9 +348,8 @@ def main():
     log()
 
     # N1 - media edited after protection. Signature still valid; hash is not.
-    outcome = attacks.run(attacks.BY_KEY["edit_media"], p1, KEY, security.load_public_key(PUBLIC), TAMPERED)
     n1 = TAMPERED / "N1_image_edited.png"
-    Path(outcome.path).replace(n1)
+    edit_media(p1, n1, KEY)
     passed.append(report("N1  image edited outside the payload region", n1, verdict_of(n1), workflow.TAMPERED))
 
     # N2 - the right file, the wrong signer.
@@ -323,9 +382,8 @@ def main():
     passed.append(report("N5  unprotected audio", cover_wav, verdict_of(cover_wav), workflow.PAYLOAD_MISSING))
 
     # N6 - payload bytes themselves altered.
-    outcome = attacks.run(attacks.BY_KEY["corrupt_record"], p2, KEY, security.load_public_key(PUBLIC), TAMPERED)
     n6 = TAMPERED / "N6_audio_payload_bits_flipped.wav"
-    Path(outcome.path).replace(n6)
+    corrupt_record(p2, n6, KEY)
     passed.append(report("N6  audio payload bytes altered", n6, verdict_of(n6), workflow.SIGNATURE_INVALID))
 
     # N7 - not a media file at all, wearing a .png name.
@@ -335,43 +393,15 @@ def main():
 
     # N8 - replay. A genuine, correctly signed payload moved into another
     # cover. Nothing is forged, and only the media hash notices.
-    outcome = attacks.run(
-        attacks.BY_KEY["transplant"], p1, KEY, security.load_public_key(PUBLIC), TAMPERED,
-        target_path=cover_wav,
-    )
     n8 = TAMPERED / "N8_audio_replayed_payload.wav"
-    Path(outcome.path).replace(n8)
+    replay_copy(p1, n8, KEY, cover_wav)
     passed.append(report("N8  a genuine payload replayed into another cover", n8, verdict_of(n8), workflow.TAMPERED))
 
     # N9 - the optional video cover object, edited outside the payload
     # region. Same story as N1, on the third codec.
-    outcome = attacks.run(attacks.BY_KEY["edit_media"], p5, KEY, security.load_public_key(PUBLIC), TAMPERED)
     n9 = TAMPERED / "N9_video_edited.avi"
-    Path(outcome.path).replace(n9)
+    edit_media(p5, n9, KEY)
     passed.append(report("N9  video edited outside the payload region", n9, verdict_of(n9), workflow.TAMPERED))
-
-    log("=" * 72)
-    log("Attack simulation against P3 (encrypted image)")
-    log()
-    # The attacked copies are scratch: the log below is the evidence, and every
-    # file is regenerable by re-running this script. Writing them into
-    # evidence/ would bury the log under artefacts nobody reads.
-    with tempfile.TemporaryDirectory() as scratch:
-        simulated = attacks.run_all(
-            p3, KEY, security.load_public_key(PUBLIC), scratch, target_path=cover_wav
-        )
-        for outcome in simulated:
-            if not outcome.ran:
-                log(f"-- {outcome.attack.label}: skipped, {outcome.note}")
-                continue
-            mark = "OK " if outcome.as_expected else "!! "
-            log(f"{mark}{outcome.attack.label}")
-            log(f"     did       {outcome.note}")
-            log(f"     verdict   {outcome.verdict}   (predicted {outcome.expected})")
-            if outcome.caveat:
-                log(f"     caveat    {outcome.caveat}")
-            log()
-            passed.append(outcome.as_expected)
 
     log("=" * 72)
     log(f"{sum(passed)} of {len(passed)} cases produced the expected verdict")

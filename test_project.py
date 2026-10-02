@@ -11,9 +11,9 @@ import pytest
 from PIL import Image
 
 import app as application
-import attacks
 import audio_helpers
 import image_helpers
+import make_demo_files
 import security
 import stego_utils as su
 import video_helpers
@@ -1332,138 +1332,85 @@ def test_a_non_numeric_offset_is_rejected(client):
     assert "whole number" in page
 
 
-# --- attack simulation module ---
+# --- tampered copies behind the demo files ---
 
 
 @pytest.fixture
-def attacked(cover, tmp_path, signer):
+def protected_image(cover, tmp_path, signer):
     source = tmp_path / "target.png"
     workflow.protect(cover, source, b"a secret worth protecting", "n.txt", KEY, 2, signer,
                      encrypt=True)
     return source
 
 
-def test_every_attack_produces_the_verdict_it_predicts(attacked, wav, tmp_path, signer):
-    outcomes = attacks.run_all(attacked, KEY, signer.public_key(), tmp_path, target_path=wav)
-
-    assert len(outcomes) == len(attacks.ATTACKS)
-    for outcome in outcomes:
-        assert outcome.ran, f"{outcome.attack.key} was skipped: {outcome.note}"
-        assert outcome.as_expected, (
-            f"{outcome.attack.key}: predicted {outcome.expected}, got {outcome.verdict}"
-        )
+def check_passed(result, label):
+    return next(c for c in result.checks if c["label"] == label)["ok"]
 
 
-def test_the_attacks_between_them_reach_four_distinct_verdicts(attacked, wav, tmp_path, signer):
-    verdicts = {o.verdict for o in attacks.run_all(attacked, KEY, signer.public_key(), tmp_path, wav)}
-
-    assert verdicts == {
-        workflow.TAMPERED,
-        workflow.SIGNATURE_INVALID,
-        workflow.PAYLOAD_MISSING,
-        workflow.WRONG_START_LOCATION,
-    }
-
-
-def test_attacks_never_modify_the_file_they_are_given(attacked, wav, tmp_path, signer):
-    before = attacked.read_bytes()
-    attacks.run_all(attacked, KEY, signer.public_key(), tmp_path, target_path=wav)
-
-    assert attacked.read_bytes() == before
-
-
-def test_retouching_the_media_leaves_the_signature_valid(attacked, tmp_path, signer):
+def test_retouching_the_media_leaves_the_signature_valid(protected_image, tmp_path, signer):
     """The whole reason a media hash is needed: the signature cannot see this."""
-    outcome = attacks.run(attacks.BY_KEY["edit_media"], attacked, KEY, signer.public_key(), tmp_path)
-    result = workflow.verify(outcome.path, KEY, signer.public_key())
+    edited = tmp_path / "edited.png"
+    make_demo_files.edit_media(protected_image, edited, KEY)
+
+    result = workflow.verify(edited, KEY, signer.public_key())
 
     assert result.verdict == workflow.TAMPERED
-    signature_check = next(c for c in result.checks if c["label"] == "Signature")
-    assert signature_check["ok"] is True
+    assert check_passed(result, "Signature") is True
+    assert check_passed(result, "Media hash") is False
 
 
-def test_a_replayed_payload_is_genuinely_signed_but_still_rejected(attacked, wav, tmp_path, signer):
+def test_rewriting_the_signed_record_breaks_the_signature(protected_image, tmp_path, signer):
+    altered = tmp_path / "altered.png"
+    make_demo_files.corrupt_record(protected_image, altered, KEY)
+
+    result = workflow.verify(altered, KEY, signer.public_key())
+
+    assert result.verdict == workflow.SIGNATURE_INVALID
+
+
+def test_a_replayed_payload_is_genuinely_signed_but_still_rejected(protected_image, wav, tmp_path, signer):
     """Nothing is forged. The record simply describes a different file."""
-    outcome = attacks.run(
-        attacks.BY_KEY["transplant"], attacked, KEY, signer.public_key(), tmp_path, target_path=wav
-    )
-    result = workflow.verify(outcome.path, KEY, signer.public_key())
+    replayed = tmp_path / "replayed.wav"
+    make_demo_files.replay_copy(protected_image, replayed, KEY, wav)
+
+    result = workflow.verify(replayed, KEY, signer.public_key())
 
     assert result.verdict == workflow.TAMPERED
-    assert next(c for c in result.checks if c["label"] == "Signature")["ok"] is True
-    assert next(c for c in result.checks if c["label"] == "Media hash")["ok"] is False
+    assert check_passed(result, "Signature") is True
+    assert check_passed(result, "Media hash") is False
 
 
 def test_media_edits_are_invisible_at_full_depth(cover, tmp_path, signer):
-    """A real limit, reported rather than hidden: at 8 LSB the masked hash
-    covers no bits at all, so it cannot detect an edit."""
+    """A real limit, stated rather than hidden: at 8 LSB the masked hash covers
+    no bits at all, so it cannot detect an edit."""
     source = tmp_path / "full_depth.png"
     workflow.protect(cover, source, b"x", "n.txt", KEY, 8, signer)
+    edited = tmp_path / "edited.png"
+    make_demo_files.edit_media(source, edited, KEY)
 
-    outcome = attacks.run(attacks.BY_KEY["edit_media"], source, KEY, signer.public_key(), tmp_path)
-
-    assert outcome.expected == workflow.AUTHENTIC
-    assert outcome.verdict == workflow.AUTHENTIC
-    assert "8 LSB" in outcome.caveat
+    assert workflow.verify(edited, KEY, signer.public_key()).verdict == workflow.AUTHENTIC
 
 
 def test_replay_between_two_protections_of_one_cover_succeeds(cover, tmp_path, signer):
-    """Also reported rather than hidden: the record binds to media content,
-    not to one instance of it."""
+    """Also stated rather than hidden: the record binds to media content, not
+    to one instance of it."""
     first, second = tmp_path / "first.png", tmp_path / "second.png"
     workflow.protect(cover, first, b"first", "n.txt", KEY, 2, signer)
     workflow.protect(cover, second, b"second", "n.txt", KEY, 2, signer)
+    replayed = tmp_path / "replayed.png"
+    make_demo_files.replay_copy(first, replayed, KEY, second)
 
-    outcome = attacks.run(
-        attacks.BY_KEY["transplant"], first, KEY, signer.public_key(), tmp_path, target_path=second
-    )
-
-    assert outcome.verdict == workflow.AUTHENTIC     # the weakness reproduces
-    assert "same" in outcome.caveat
+    assert workflow.verify(replayed, KEY, signer.public_key()).verdict == workflow.AUTHENTIC
 
 
-def test_attacks_skip_cleanly_when_they_cannot_apply(cover, tmp_path, signer):
-    empty = tmp_path / "empty.png"
-    workflow.protect(cover, empty, b"", "n.txt", KEY, 2, signer)
+def test_tampered_copies_never_modify_the_file_they_are_given(protected_image, wav, tmp_path):
+    before = protected_image.read_bytes()
+    make_demo_files.edit_media(protected_image, tmp_path / "a.png", KEY)
+    make_demo_files.corrupt_record(protected_image, tmp_path / "b.png", KEY)
+    make_demo_files.replay_copy(protected_image, tmp_path / "c.wav", KEY, wav)
+    make_demo_files.save_bit_flipped_copy(protected_image, tmp_path / "d.png", 2)
 
-    no_message = attacks.run(attacks.BY_KEY["corrupt_message"], empty, KEY, signer.public_key(), tmp_path)
-    no_target = attacks.run(attacks.BY_KEY["transplant"], empty, KEY, signer.public_key(), tmp_path)
-
-    assert not no_message.ran and "no message" in no_message.note
-    assert not no_target.ran and "second cover" in no_target.note
-
-
-def test_attacking_an_unprotected_file_reports_that_there_is_nothing_to_attack(cover, tmp_path, signer):
-    outcome = attacks.run(attacks.BY_KEY["edit_media"], cover, KEY, signer.public_key(), tmp_path)
-
-    assert not outcome.ran
-    assert "no payload" in outcome.note
-
-
-def test_attack_page_runs_every_attack(client, tmp_path):
-    web, image = client
-
-    page = post_multipart(
-        web,
-        "/protect",
-        {"file": (io.BytesIO(image), "c.png"), "key": "k", "lsb_n": "2", "message": "secret"},
-    ).get_data(as_text=True)
-    stego_name = re.search(r"/media/([A-Za-z0-9_]+_stego\.png)", page).group(1)
-    stego = web.get(f"/media/{stego_name}").get_data()
-
-    results = post_multipart(
-        web,
-        "/attack",
-        {
-            "file": (io.BytesIO(stego), "s.png"),
-            "target": (io.BytesIO(wav_bytes()), "other.wav"),
-            "key": "k",
-        },
-    ).get_data(as_text=True)
-
-    assert "8 of 8 attacks produced" in results
-    for attack in attacks.ATTACKS:
-        assert attack.label in results
+    assert protected_image.read_bytes() == before
 
 
 @pytest.fixture
@@ -1611,7 +1558,7 @@ def test_walkthrough_home_and_original_pages(walkthrough_client):
     assert "/walkthrough?role=sender" in home and "/receiver" in home
     assert b"walkthrough.js" in web.get("/walkthrough").data
     for route in (
-        "/receiver", "/protect", "/verify", "/attack",
+        "/receiver", "/protect", "/verify",
         "/static/walkthrough.css", "/static/walkthrough.js",
         "/static/flows.css", "/static/send.js", "/static/receiver.js",
     ):
@@ -1626,7 +1573,7 @@ def test_walkthrough_home_and_original_pages(walkthrough_client):
         application.app.config["MAX_CONTENT_LENGTH"] = limit
 
 
-@pytest.mark.parametrize("route", ["/walkthrough", "/receiver", "/protect", "/verify", "/attack"])
+@pytest.mark.parametrize("route", ["/walkthrough", "/receiver", "/protect", "/verify"])
 def test_every_page_links_back_to_the_start_screen(walkthrough_client, route):
     """Wherever someone is, one click returns them to the role picker."""
     page = walkthrough_client.get(route).get_data(as_text=True)
